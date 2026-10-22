@@ -138,15 +138,21 @@ plus a legacy file, and compares the GPU weather map.
 ## Animate
 
 The environment cube is re-rendered from parameters, never baked, so skies animate. An
-animation is a short recipe saved inside the sky `.wcx` (`src/animation.ts`):
+animation is saved inside the sky `.wcx` (`src/animation.ts`):
 
-- **Wind:** the whole weather map drifts (background, shapes and paint), at a speed in
-  km/h toward a compass heading.
+- **Wind:** the whole weather map drifts (background, shapes and paint) in km/h toward a
+  compass heading. Speed and heading can be keyed; the drift is their integral over time.
 - **Cloud life:** the cloud shape noise scrolls upward (Takram's evolution), so clouds
   grow and dissolve as they drift. It is the minutes for a full turnover; 0 keeps shapes.
 - **Time-lapse:** scene time per clip second. 120× turns a 10 s clip into 20 minutes of
   weather.
-- **Sun (optional):** moves in a straight line to an end elevation and azimuth.
+- **Keys:** frame 0 is always the sky as composed. Scrub to a later time and change a
+  slider (sun, atmosphere, coverage, density, cloud character, layer heights) or move,
+  resize, rotate or fade a shape: the change becomes a key at that time (auto-key). While
+  scrubbed, the sliders and shapes show their values at that time. Values ease between the
+  keys that set them (or move linearly), angles take the short way round, and values hold
+  after the last key. So a storm can travel against the wind and grow while the sun sets.
+  Key edits are undoable; the key list jumps to or removes keys.
 
 Frame 0 is exactly the sky as composed, and every frame is a pure function of time:
 any frame can be rendered alone and matches the sequence (to well under one display step;
@@ -214,6 +220,6 @@ time of day, mood and scene. `docs/moniker.md` lists every slot and word, and
    ground model, edge albedo instead of powder.
 7. **Export and documents.** Done: EXR/HDR export and sky `.wcx` save/open.
 8. **Looks.** Done: six factory looks, saved `.wcx` looks named by Moniker, and Moniker names for skies.
-9. **Animation.** Done: wind drift, cloud evolution, sun moves, sequence export.
+9. **Animation.** Done: wind drift, cloud evolution, keys for settings and shapes (auto-key), sequence export.
 10. **Ground and skylight.** Done: the ground is lit by the rendered sky and clouds, plus direct sun
    through a cloud shadow map.

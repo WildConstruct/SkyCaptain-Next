@@ -32,16 +32,59 @@ assert.deepEqual(
 assert.match(await page.locator('details:has(summary:text("Animate")) .hint').first().textContent(), /3 frames · 60 min of weather · clouds drift 20\.0 km and turn over 3\.0×/);
 console.log('recipe edits ok');
 
+// 1b. Keys by editing away from frame 0: a storm that moves and grows, and a setting sun.
+await page.evaluate(() => {
+  window.skyShapes.add({ id: 'storm', kind: 'storm_cell', x: 0, z: 40, size: 6, aspect: 1, rotation: 0, strength: 1, type: null, seed: 3, visible: true });
+});
+const sunSlider = page.locator('label.row', { hasText: 'Sun elevation' }).locator('input[type=range]');
+const slide = (locator, value) => locator.evaluate((el, v) => { el.value = String(v); el.dispatchEvent(new Event('input', { bubbles: true })); }, value);
+await page.evaluate(() => window.skyAnimate.seek(1));
+// The same call the minimap and sky overlay make while dragging a shape.
+await page.evaluate(() => window.skyShapes.patch('storm', { x: 20, size: 12 }));
+await slide(sunSlider, 4);
+let state = await page.evaluate(() => ({
+  keys: window.skyAnimate.value.keys,
+  base: window.skyShapes.baseShapes.find((s) => s.id === 'storm'),
+  shown: window.skyShapes.shapes.find((s) => s.id === 'storm'),
+  baseSun: window.skyGraph['settings'].sunElevation,
+}));
+assert.equal(state.keys.length, 1, 'edits at one time share a key');
+assert.deepEqual(state.keys[0].shapes.storm, { x: 20, size: 12 });
+assert.equal(state.keys[0].sky.sunElevation, 4);
+assert.deepEqual([state.base.x, state.base.size, state.baseSun], [0, 6, 20], 'frame 0 (the composed sky) is untouched');
+assert.deepEqual([state.shown.x, state.shown.size], [20, 12], 'the view shows the keyed layer');
+// Halfway: smooth easing passes through the midpoint.
+await page.evaluate(() => window.skyAnimate.seek(0.5));
+state = await page.evaluate(() => ({ shown: window.skyShapes.shapes.find((s) => s.id === 'storm'), slider: document.querySelector('label.row input[type=range]').value }));
+assert.deepEqual([state.shown.x, state.shown.size], [10, 9], 'halfway between frame 0 and the key');
+assert.equal(Number(state.slider), 12, 'the sun slider shows the value at this time');
+await page.evaluate(() => window.skyAnimate.seek(0));
+state = await page.evaluate(() => ({ shown: window.skyShapes.shapes.find((s) => s.id === 'storm'), animated: window.skyShapes.animated }));
+assert.deepEqual([state.shown.x, state.animated], [0, false], 'back at frame 0, the composed layers');
+// Undo removes the last key edit (the sun), keeping the storm's.
+await page.evaluate(() => window.skyAnimate.seek(1));
+await page.keyboard.press('Control+z');
+state = await page.evaluate(() => window.skyAnimate.value.keys);
+assert.equal(state[0].sky.sunElevation, undefined, 'undo took the sun key back');
+assert.deepEqual(state[0].shapes.storm, { x: 20, size: 12 }, 'the storm key stays');
+await page.keyboard.press('Control+Shift+z');
+assert.equal(await page.evaluate(() => window.skyAnimate.value.keys[0].sky.sunElevation), 4, 'redo restores it');
+await page.evaluate(() => window.skyAnimate.seek(0));
+console.log('keys: storm moves 0 -> 20 km and grows, sun 20 -> 4 deg; frame 0 untouched; undo and redo');
+
 // 2. The recipe travels in the sky .wcx and comes back on open.
 const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save sky' }).click()]);
 const skyPath = 'shots/animate/sky.wcx';
 await download.saveAs(skyPath);
 const sky = JSON.parse(readFileSync(skyPath, 'utf8'));
 assert.equal(sky.sky.animation.windSpeed, 20, 'animation saved in the sky file');
+assert.deepEqual(sky.sky.animation.keys[0].shapes.storm, { x: 20, size: 12 }, 'keys saved in the sky file');
+assert.equal(sky.sky.shapes.find((s) => s.id === 'storm').x, 0, 'the file holds the composed layer');
 await page.evaluate(() => { window.skyAnimate.value = { ...window.skyAnimate.value, windSpeed: 5 }; });
 await page.locator('input[type=file][accept=".wcx,.json"]').setInputFiles(skyPath);
 await page.waitForTimeout(300);
 assert.equal(await page.evaluate(() => window.skyAnimate.value.windSpeed), 20, 'animation restored on open');
+assert.equal(await page.evaluate(() => window.skyAnimate.value.keys.length), 1, 'keys restored on open');
 console.log('animation round-trips through the sky file');
 
 // 3. A 3-frame sequence: numbered, moving, deterministic.
