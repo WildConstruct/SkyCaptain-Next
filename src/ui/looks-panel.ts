@@ -1,5 +1,5 @@
 // Looks: factory vibes and saved looks as chips, plus Save look with a Moniker-suggested
-// name the artist can edit, and .wcx import.
+// name the artist can edit, and .wcx import (a sky .wcx imports as its look).
 
 import * as presets from '../presets';
 import type { Settings } from '../settings';
@@ -14,6 +14,11 @@ export class LooksPanel {
     private settings: Settings,
     private set: (key: keyof Settings, value: number) => void,
   ) {
+    this.render();
+  }
+
+  /** Redraws the chips, e.g. after a look arrives through Open…. */
+  refresh(): void {
     this.render();
   }
 
