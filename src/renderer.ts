@@ -55,12 +55,14 @@ export class Renderer {
   private msPipeline: GPUComputePipeline;
   private skyPipeline: GPUComputePipeline;
   private cloudPipeline: GPUComputePipeline;
+  private referencePipeline: GPUComputePipeline;
   private displayPipeline: GPURenderPipeline;
   private exportPipeline: GPUComputePipeline;
   /** While an export runs, the interactive view stops refining clouds. */
   private exporting = false;
 
   private cloudBindGroup!: GPUBindGroup;
+  private referenceBindGroup!: GPUBindGroup;
   private displayBindGroup!: GPUBindGroup;
 
   private cloudFrame = 0;
@@ -134,6 +136,7 @@ export class Renderer {
     this.msPipeline = compute(atmosphereModule, 'multiscatter');
     this.skyPipeline = compute(atmosphereModule, 'sky_cube');
     this.cloudPipeline = compute(cloudModule, 'render');
+    this.referencePipeline = compute(cloudModule, 'render_reference');
     this.exportPipeline = compute(module(exportWgsl, 'export'), 'composite');
     this.displayPipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -216,6 +219,7 @@ export class Renderer {
     this.allocatedFace = face;
 
     this.cloudBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube);
+    this.referenceBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube, this.referencePipeline);
     this.displayBindGroup = this.device.createBindGroup({
       layout: this.displayPipeline.getBindGroupLayout(0),
       entries: [
@@ -229,9 +233,9 @@ export class Renderer {
     });
   }
 
-  private cloudBindGroupFor(params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture): GPUBindGroup {
+  private cloudBindGroupFor(params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture, pipeline = this.cloudPipeline): GPUBindGroup {
     return this.device.createBindGroup({
-      layout: this.cloudPipeline.getBindGroupLayout(0),
+      layout: pipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: params } },
         { binding: 1, resource: this.repeatSampler },
@@ -400,8 +404,9 @@ export class Renderer {
         label: 'clouds',
         timestampWrites: ts ? { querySet: ts.query, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } : undefined,
       });
-      pass.setPipeline(this.cloudPipeline);
-      pass.setBindGroup(0, this.cloudBindGroup);
+      const reference = this.settings.quality === 'reference';
+      pass.setPipeline(reference ? this.referencePipeline : this.cloudPipeline);
+      pass.setBindGroup(0, reference ? this.referenceBindGroup : this.cloudBindGroup);
       const groups = Math.ceil(quality.faceSize / 4 / 8);
       pass.dispatchWorkgroups(groups, groups, 6);
       pass.end();

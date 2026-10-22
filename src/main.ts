@@ -112,6 +112,10 @@ async function main(): Promise<void> {
   const status = document.querySelector<HTMLElement>('#status')!;
   const query = new URLSearchParams(location.search);
   const settings = readUrlOverrides(DEFAULTS, query);
+  // Dev overrides for tools/: cube face size and samples of the active quality tier.
+  const tier = QUALITY[settings.quality];
+  if (query.get('face')) tier.faceSize = Number(query.get('face'));
+  if (query.get('samples')) tier.samples = Number(query.get('samples'));
   const noiseSize = Number(query.get('noise') ?? 128);
 
   let renderer: Renderer;

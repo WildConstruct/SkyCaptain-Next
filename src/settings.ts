@@ -1,4 +1,4 @@
-export type QualityName = 'laptop' | 'desktop' | 'ultra';
+export type QualityName = 'laptop' | 'desktop' | 'ultra' | 'reference';
 
 export interface Quality {
   label: string;
@@ -13,6 +13,8 @@ export const QUALITY: Record<QualityName, Quality> = {
   laptop: { label: 'Laptop (M1)', faceSize: 512, viewSteps: 160, lightSteps: 4, samples: 4 },
   desktop: { label: 'Desktop', faceSize: 768, viewSteps: 300, lightSteps: 5, samples: 6 },
   ultra: { label: 'Ultra', faceSize: 1024, viewSteps: 500, lightSteps: 6, samples: 8 },
+  // Path-traced ground truth for judging the approximations (clouds.wgsl render_reference).
+  reference: { label: 'Reference (path traced, slow)', faceSize: 256, viewSteps: 0, lightSteps: 0, samples: 256 },
 };
 
 export interface Settings {

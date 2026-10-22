@@ -370,3 +370,211 @@ fn render(@builtin(global_invocation_id) id: vec3u) {
     store_texel(texel, face, resolved);
   }
 }
+
+// ---------------------------------------------------------------------------------------
+// Reference: a slow, unbiased-in-the-clouds path tracer over the same density field, used
+// to score the approximations above (octave multiple scattering, cone shadowing, sky
+// gradient, ground bounce). Not used for normal work: select the Reference quality tier.
+//
+// Delta tracking for collisions and ratio tracking for sun visibility, against a majorant
+// of params.cloud.z (density x weather scale x profile never exceeds it). Albedo is 1 and
+// phase sampling is the same dual Henyey-Greenstein, so the path throughput stays 1 until
+// Russian roulette. Sun is next-event estimated; the sky cube (which has no sun disk) is
+// what an escaping path sees. The ground is Lambertian with the scene albedo: it gets sun
+// through the clouds and unoccluded sky irradiance, and ends the path.
+// Each sample stores (scatter, 1 - hit) with the same haze fade as march(), so the
+// display composites both renderers the same way.
+
+struct Rng { state: u32 }
+
+fn rng_next(r: ptr<function, Rng>) -> f32 {
+  (*r).state = (*r).state * 747796405u + 2891336453u;
+  var w = (((*r).state >> (((*r).state >> 28u) + 4u)) ^ (*r).state) * 277803737u;
+  w = (w >> 22u) ^ w;
+  return f32(w >> 8u) * (1.0 / 16777216.0);
+}
+
+fn reference_extinction(p: vec3f) -> f32 {
+  // mip 0 with jitter 0 always takes the detail branch.
+  return media_at(p, 0.0, 0.0);
+}
+
+// Distance along dir until the ray leaves the cloud shell (from inside or below it).
+// Returns (enter, exit); exit < 0 when the ray never touches the shell.
+fn shell_interval(o: vec3f, dir: vec3f) -> vec2f {
+  let r_bottom = ground_radius() + cloud_bottom();
+  let r_top = ground_radius() + cloud_top();
+  let top = ray_sphere(o, dir, r_top);
+  if (top.y <= 0.0) { return vec2f(-1.0); }
+  let r = length(o);
+  let bottom = ray_sphere(o, dir, r_bottom);
+  if (r < r_bottom) {
+    // Below the shell: enter at the bottom sphere going up.
+    if (bottom.y <= 0.0) { return vec2f(-1.0); }
+    return vec2f(bottom.y, top.y);
+  }
+  // Inside the shell: leave through the bottom if the ray dips into it, else the top.
+  if (bottom.x > 0.0) { return vec2f(0.0, bottom.x); }
+  return vec2f(0.0, top.y);
+}
+
+struct Collision {
+  hit: bool,
+  t: f32,
+}
+
+fn delta_track(o: vec3f, dir: vec3f, t0: f32, t1: f32, majorant: f32, rng: ptr<function, Rng>) -> Collision {
+  var c: Collision;
+  c.hit = false;
+  c.t = t0;
+  for (var i = 0; i < 100000; i++) {
+    c.t -= log(1.0 - rng_next(rng)) / majorant;
+    if (c.t >= t1) { return c; }
+    if (rng_next(rng) * majorant < reference_extinction(o + dir * c.t)) {
+      c.hit = true;
+      return c;
+    }
+  }
+  return c;
+}
+
+// Ratio tracking with Russian roulette below 0.1.
+fn ratio_track(o: vec3f, dir: vec3f, majorant: f32, rng: ptr<function, Rng>) -> f32 {
+  let span = shell_interval(o, dir);
+  if (span.y <= 0.0) { return 1.0; }
+  var t = span.x;
+  var transmittance = 1.0;
+  for (var i = 0; i < 100000; i++) {
+    t -= log(1.0 - rng_next(rng)) / majorant;
+    if (t >= span.y) { break; }
+    transmittance *= 1.0 - reference_extinction(o + dir * t) / majorant;
+    if (transmittance < 0.1) {
+      if (rng_next(rng) > transmittance * 10.0) { return 0.0; }
+      transmittance = 0.1;
+    }
+  }
+  return transmittance;
+}
+
+fn orthonormal(n: vec3f) -> mat3x3f {
+  let s = select(-1.0, 1.0, n.z >= 0.0);
+  let a = -1.0 / (s + n.z);
+  let b = n.x * n.y * a;
+  return mat3x3f(vec3f(1.0 + s * n.x * n.x * a, s * b, -s * n.x), vec3f(b, s + n.y * n.y * a, -n.y), n);
+}
+
+fn sample_hg(wo: vec3f, g: f32, u: vec2f) -> vec3f {
+  var cos_theta: f32;
+  if (abs(g) < 1e-3) {
+    cos_theta = 1.0 - 2.0 * u.x;
+  } else {
+    let s = (1.0 - g * g) / (1.0 - g + 2.0 * g * u.x);
+    cos_theta = (1.0 + g * g - s * s) / (2.0 * g);
+  }
+  let sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
+  let phi = 2.0 * PI * u.y;
+  return orthonormal(wo) * vec3f(sin_theta * cos(phi), sin_theta * sin(phi), cos_theta);
+}
+
+fn sample_phase(wo: vec3f, rng: ptr<function, Rng>) -> vec3f {
+  let u = vec2f(rng_next(rng), rng_next(rng));
+  if (rng_next(rng) < params.light.w) { return sample_hg(wo, -params.light.z, u); }
+  return sample_hg(wo, params.light.y, u);
+}
+
+fn reference_path(dir0: vec3f, rng: ptr<function, Rng>) -> vec4f {
+  let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
+  if (dir0.y <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  let span0 = shell_interval(origin, dir0);
+  if (span0.y <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  let majorant = max(params.cloud.z, 1e-3);
+  let first = delta_track(origin, dir0, span0.x, min(span0.y, MAX_RAY_KM), majorant, rng);
+  if (!first.hit) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+
+  let sun = params.sun_dir.xyz;
+  let illum = params.sun_color.rgb * params.sun_dir.w;
+  let sky_top = textureSampleLevel(sky_tex, clamp_sampler, vec3f(0.0, 1.0, 0.0), 0.0).rgb;
+  let sky_side = (textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(1.0, 0.25, 0.0)), 0.0).rgb
+                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(-1.0, 0.25, 0.0)), 0.0).rgb
+                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(0.0, 0.25, 1.0)), 0.0).rgb
+                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(0.0, 0.25, -1.0)), 0.0).rgb) * 0.25;
+  let ground_sky_irradiance = PI * (sky_top * 0.5 + sky_side * 0.5);
+
+  var p = origin + dir0 * first.t;
+  var dir = dir0;
+  var throughput = 1.0;
+  var radiance = vec3f(0.0);
+  for (var bounce = 0; bounce < 256; bounce++) {
+    // Next-event estimation toward the sun.
+    let visibility = ratio_track(p, sun, majorant, rng);
+    radiance += throughput * illum * sun_transmittance(p) * phase(dot(dir, sun), 1.0) * visibility;
+
+    if (bounce >= 8) {
+      if (rng_next(rng) > 0.9) { break; }
+      throughput /= 0.9;
+    }
+    dir = sample_phase(dir, rng);
+    let span = shell_interval(p, dir);
+    if (span.y <= 0.0) {
+      radiance += throughput * textureSampleLevel(sky_tex, clamp_sampler, dir, 0.0).rgb;
+      break;
+    }
+    let c = delta_track(p, dir, span.x, span.y, majorant, rng);
+    if (c.hit) {
+      p += dir * c.t;
+      continue;
+    }
+    // Left the shell: through the top into the sky, or through the bottom to the ground.
+    let exit = p + dir * span.y;
+    if (length(exit) > ground_radius() + cloud_bottom() + 1e-3) {
+      radiance += throughput * textureSampleLevel(sky_tex, clamp_sampler, dir, 0.0).rgb;
+      break;
+    }
+    let ground_hit = ray_sphere(exit, dir, ground_radius());
+    if (ground_hit.x <= 0.0) {
+      // Grazes the bottom of the shell without reaching the ground: look at the sky.
+      radiance += throughput * textureSampleLevel(sky_tex, clamp_sampler, dir, 0.0).rgb;
+      break;
+    }
+    let g = exit + dir * ground_hit.x;
+    let n = normalize(g);
+    let cos_sun = max(dot(n, sun), 0.0);
+    let sun_ground = illum * sun_transmittance(g) * cos_sun * ratio_track(g, sun, majorant, rng);
+    radiance += throughput * params.misc.y / PI * (ground_sky_irradiance + sun_ground);
+    break;
+  }
+  let fade = exp(-first.t / (params.misc.x * 3.0));
+  return vec4f(radiance * fade, 1.0 - fade);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn render_reference(@builtin(global_invocation_id) id: vec3u) {
+  let size = u32(params.march.z);
+  let blocks = size / 4u;
+  if (id.x >= blocks || id.y >= blocks) { return; }
+  let face = id.z;
+  let frame = u32(params.march.w);
+  let slot = frame % 16u;
+  let pass_index = frame / 16u;
+  let texel = id.xy * 4u + BAYER_OFFSETS[slot];
+  var rng: Rng;
+  rng.state = pcg3d(vec3u(texel.x + face * size, texel.y, frame)).x;
+  let sub = vec2f(rng_next(&rng), rng_next(&rng));
+  let dir = cube_dir(face, (vec2f(texel) + sub) / f32(size));
+  let value = reference_path(dir, &rng);
+
+  let index = (face * size + texel.y) * size + texel.x;
+  var resolved = value;
+  if (pass_index > 0u) {
+    let previous = unpack(accum[index]);
+    resolved = previous + (value - previous) / f32(pass_index + 1u);
+  }
+  accum[index] = pack(resolved);
+  if (pass_index == 0u && slot == 0u) {
+    for (var y = 0u; y < 4u; y++) {
+      for (var x = 0u; x < 4u; x++) { store_texel(id.xy * 4u + vec2u(x, y), face, resolved); }
+    }
+  } else {
+    store_texel(texel, face, resolved);
+  }
+}
