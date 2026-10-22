@@ -135,6 +135,27 @@ can't change a saved sky. **Open…** takes a sky `.wcx`, or an older `.sky.json
 `.wcx` opened there just applies the look. `tools/smoke-document.mjs` round-trips a sky,
 plus a legacy file, and compares the GPU weather map.
 
+## Animate
+
+The environment cube is re-rendered from parameters, never baked, so skies animate. An
+animation is a short recipe saved inside the sky `.wcx` (`src/animation.ts`):
+
+- **Wind:** the whole weather map drifts (background, shapes and paint), at a speed in
+  km/h toward a compass heading.
+- **Cloud life:** the cloud shape noise scrolls upward (Takram's evolution), so clouds
+  grow and dissolve as they drift. It is the minutes for a full turnover; 0 keeps shapes.
+- **Time-lapse:** scene time per clip second. 120× turns a 10 s clip into 20 minutes of
+  weather.
+- **Sun (optional):** moves in a straight line to an end elevation and azimuth.
+
+Frame 0 is exactly the sky as composed, and every frame is a pure function of time:
+any frame can be rendered alone and comes out identical. The scrubber and **Play** preview
+in the viewport (the view refines progressively, so fast motion shimmers there).
+**Export sequence…** renders every frame fresh and converged as numbered lat-long
+EXR/HDR files (`Name.0001.exr`, …) into a folder you pick (Chrome and Edge) or as
+downloads elsewhere. `tools/smoke-animate.mjs` checks the recipe, the sky file and a short
+sequence, including that a frame re-rendered on its own matches.
+
 ## Looks and Moniker names
 
 ![Vibes](docs/look/vibes-001.png)
@@ -174,5 +195,6 @@ time of day, mood and scene. `docs/moniker.md` lists every slot and word, and
    ground model, edge albedo instead of powder.
 7. **Export and documents.** Done: EXR/HDR export and sky `.wcx` save/open.
 8. **Looks.** Done: six factory looks, saved `.wcx` looks named by Moniker, and Moniker names for skies.
-9. **Ground and skylight.** The ground is lit only by the sun today, so low-sun skies have a
+9. **Animation.** Done: wind drift, cloud evolution, sun moves, sequence export.
+10. **Ground and skylight.** The ground is lit only by the sun today, so low-sun skies have a
    near-black ground. Add sky irradiance and cloud shadows on the ground.
