@@ -1,7 +1,8 @@
 // Weather map: procedural background, then shape layers in order, then paint.
 // The map covers a fixed square of side params.scale.z km centred on the eye (no tiling).
-// r = local weather, g = cloud type (0 stratus .. 1 towering), b = density multiplier,
-// a = how much global coverage may act here (0 where Clear or a clear hole forced clear sky).
+// r = local weather, g = cloud type (0 stratus .. 1 towering), b = density multiplier (0
+// where Clear or a clear hole forced clear sky, whatever the coverage), a = how much of the
+// local weather is authored (shapes, paint): only that part may lift the coverage.
 //
 // Local weather feeds Takram's coverage function (clouds.wgsl), which turns smooth bumps
 // into domed clouds and flat plateaus into flat-topped walls. So nothing writes plateaus:
@@ -236,5 +237,6 @@ fn generate(@builtin(global_invocation_id) id: vec3u) {
 
   let open = 1.0 - cell.clear;
   let local_weather = max(max(background * open, cell.amount * authored_cells(xz, cell.kind, seed_u)), cell.direct);
-  textureStore(weather_out, id.xy, vec4f(local_weather, cell.kind, cell.density, open));
+  let authored = clamp(max(cell.amount, cell.direct) * 2.0, 0.0, 1.0);
+  textureStore(weather_out, id.xy, vec4f(local_weather, cell.kind, cell.density * open, authored));
 }

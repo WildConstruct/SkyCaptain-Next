@@ -108,11 +108,12 @@ fn sample_weather(p: vec3f, altitude: f32) -> Weather {
   if (w.hf >= 1.0) { return w; }
   let local_weather = pow(tex.r, WEATHER_EXPONENT);
   // skyCaptain: Takram's coverage is one global number, and below ~0.6 it erodes everything
-  // above a low dome, so a painted storm would never stand up. Strong local weather raises
-  // coverage locally, up to AUTHORED_COVERAGE: the most at which shape noise still carves
-  // (density stays below 1), so authored clouds never set solid. Clear and clear holes
-  // hold the global coverage off (weather alpha).
-  let coverage = max(params.cloud.x * tex.a, AUTHORED_COVERAGE * local_weather);
+  // above a low dome, so a painted storm would never stand up. Authored weather (shapes,
+  // paint: weather alpha) raises coverage locally, up to AUTHORED_COVERAGE: the most at
+  // which shape noise still carves, so authored clouds never set solid. The background
+  // follows the global coverage exactly, as upstream. Clear zeroes the density (blue).
+  if (tex.b <= 0.0) { return w; }
+  let coverage = max(params.cloud.x, AUTHORED_COVERAGE * local_weather * tex.a);
   let factor = 1.0 - coverage * shape_altering(w.hf);
   w.density = remap_clamped(mix(local_weather, 1.0, COVERAGE_FILTER_WIDTH), factor, factor + COVERAGE_FILTER_WIDTH);
   w.scale = tex.b;
