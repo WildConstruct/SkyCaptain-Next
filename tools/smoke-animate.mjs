@@ -29,7 +29,7 @@ assert.deepEqual(
   [recipe.duration, recipe.fps, recipe.timeLapse, recipe.windSpeed, recipe.windHeading, recipe.cloudLife],
   [1, 3, 3600, 20, 90, 20],
 );
-assert.match(await page.locator('details:has(summary:text("Animate")) .hint').first().textContent(), /3 frames · 60 min of weather · clouds drift 20\.0 km and turn over 3\.0×/);
+assert.match(await page.locator('details:has(summary:text("Animate")) .clip-summary').textContent(), /3 frames · 60 min of weather · clouds drift 20\.0 km and turn over 3\.0×/);
 console.log('recipe edits ok');
 
 // 1b. Keys by editing away from frame 0: a storm that moves and grows, and a setting sun.
@@ -55,14 +55,14 @@ assert.deepEqual([state.base.x, state.base.size, state.baseSun], [0, 6, 20], 'fr
 assert.deepEqual([state.shown.x, state.shown.size], [20, 12], 'the view shows the keyed layer');
 // Halfway: smooth easing passes through the midpoint.
 await page.evaluate(() => window.skyAnimate.seek(0.5));
-state = await page.evaluate(() => ({ shown: window.skyShapes.shapes.find((s) => s.id === 'storm'), slider: document.querySelector('label.row input[type=range]').value }));
+state = { shown: await page.evaluate(() => window.skyShapes.shapes.find((s) => s.id === 'storm')), slider: await sunSlider.inputValue() };
 assert.deepEqual([state.shown.x, state.shown.size], [10, 9], 'halfway between frame 0 and the key');
 assert.equal(Number(state.slider), 12, 'the sun slider shows the value at this time');
 await page.evaluate(() => window.skyAnimate.seek(0));
 state = await page.evaluate(() => ({ shown: window.skyShapes.shapes.find((s) => s.id === 'storm'), animated: window.skyShapes.animated }));
 assert.deepEqual([state.shown.x, state.animated], [0, false], 'back at frame 0, the composed layers');
 // Undo removes the last key edit (the sun), keeping the storm's.
-await page.evaluate(() => window.skyAnimate.seek(1));
+await page.evaluate(() => { window.skyAnimate.seek(1); document.activeElement?.blur(); });
 await page.keyboard.press('Control+z');
 state = await page.evaluate(() => window.skyAnimate.value.keys);
 assert.equal(state[0].sky.sunElevation, undefined, 'undo took the sun key back');

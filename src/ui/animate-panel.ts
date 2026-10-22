@@ -158,7 +158,7 @@ export class AnimatePanel {
     root.append(timeRow, controls);
 
     this.summary = document.createElement('p');
-    this.summary.className = 'hint';
+    this.summary.className = 'hint clip-summary';
     root.append(this.summary);
 
     // Sequence export.
