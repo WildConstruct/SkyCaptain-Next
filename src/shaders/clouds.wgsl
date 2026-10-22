@@ -16,6 +16,9 @@
 @group(0) @binding(9) var cloud_out: texture_storage_2d_array<rgba16float, write>;
 // Downwelling irradiance from the previous frame's environment (downwelling.wgsl).
 @group(0) @binding(10) var<storage, read> downwelling: vec4f;
+// Cloud shadow map over the ground around the eye: ground_shadow writes it, the ground reads it.
+@group(0) @binding(11) var shadow_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(12) var shadow_tex: texture_2d<f32>;
 
 const BAYER_OFFSETS = array<vec2u, 16>(
   vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
@@ -235,7 +238,11 @@ fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
 // into the cloud cube as radiance with transmittance 1, so the composite adds it on top of
 // the air in front of the ground (sky cube).
 
-const GROUND_SHADOW_STEPS: i32 = 24;
+// The eye is 2 m up, so the visible ground ends at the horizon about 5 km away: the shadow
+// map covers 12 km around the eye (512 texels, ~23 m each), marched once per change with
+// many steps instead of per ground sample. Smooth, and cheap per frame.
+const GROUND_SHADOW_KM: f32 = 12.0;
+const GROUND_SHADOW_STEPS: i32 = 96;
 
 fn transmittance_lut_at(r: f32, mu: f32) -> vec3f {
   let uv = vec2f(mu * 0.5 + 0.5, clamp((r - ground_radius()) / (params.layer.w - ground_radius()), 0.0, 1.0));
@@ -258,6 +265,23 @@ fn layer_optical_depth(p: vec3f, dir: vec3f, steps: i32, jitter: f32) -> f32 {
   return depth;
 }
 
+fn ground_point(xz: vec2f) -> vec3f {
+  let r = ground_radius();
+  return vec3f(xz.x, sqrt(max(r * r - dot(xz, xz), 0.0)), xz.y);
+}
+
+@compute @workgroup_size(8, 8)
+fn ground_shadow(@builtin(global_invocation_id) id: vec3u) {
+  let size = textureDimensions(shadow_out);
+  if (any(id.xy >= size)) { return; }
+  let xz = ((vec2f(id.xy) + 0.5) / vec2f(size) - 0.5) * GROUND_SHADOW_KM;
+  let g = ground_point(xz);
+  let sun = params.sun_dir.xyz;
+  var shadow = 0.0;
+  if (dot(normalize(g), sun) > 0.0) { shadow = exp(-layer_optical_depth(g, sun, GROUND_SHADOW_STEPS, 0.5)); }
+  textureStore(shadow_out, id.xy, vec4f(shadow, 0.0, 0.0, 1.0));
+}
+
 fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
   let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
   let t_ground = ray_sphere(origin, dir, ground_radius()).x;
@@ -270,7 +294,7 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
   let cos_sun = dot(n, sun);
   var direct = vec3f(0.0);
   if (cos_sun > 0.0) {
-    let shadow = exp(-layer_optical_depth(g, sun, GROUND_SHADOW_STEPS, jitter.x));
+    let shadow = textureSampleLevel(shadow_tex, clamp_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0).r;
     direct = illum * transmittance_lut_at(length(g), cos_sun) * cos_sun * shadow;
   }
   let irradiance = direct + downwelling.rgb;

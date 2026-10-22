@@ -65,6 +65,9 @@ export class Renderer {
   private displayPipeline: GPURenderPipeline;
   private exportPipeline: GPUComputePipeline;
   private downwellingPipeline: GPUComputePipeline;
+  private shadowPipeline: GPUComputePipeline;
+  /** Cloud shadows on the ground around the eye (clouds.wgsl ground_shadow). */
+  private shadowTex: GPUTexture;
   /** Downwelling irradiance onto the ground, integrated from the view's cubes (16 bytes). */
   private downwellingBuffer: GPUBuffer;
   private downwellingBindGroup!: GPUBindGroup;
@@ -150,6 +153,8 @@ export class Renderer {
     this.referencePipeline = compute(cloudModule, 'render_reference');
     this.exportPipeline = compute(module(exportWgsl, 'export'), 'composite');
     this.downwellingPipeline = compute(module(downwellingWgsl, 'downwelling'), 'integrate');
+    this.shadowPipeline = compute(cloudModule, 'ground_shadow');
+    this.shadowTex = device.createTexture({ size: [512, 512], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
     this.downwellingBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     this.displayPipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -274,6 +279,7 @@ export class Renderer {
         { binding: 8, resource: { buffer: accum } },
         { binding: 9, resource: cube.createView({ dimension: '2d-array' }) },
         { binding: 10, resource: { buffer: downwelling } },
+        { binding: 12, resource: this.shadowTex.createView() },
       ],
     });
   }
@@ -390,6 +396,7 @@ export class Renderer {
       this.weatherVersion++;
     }
     const anyCloudChange = [...this.pending].some((p) => p !== 'view');
+    if (anyCloudChange) this.runGroundShadow(encoder);
     this.pending.clear();
     if (anyCloudChange) this.cloudFrame = 0;
   }
@@ -416,6 +423,25 @@ export class Renderer {
       { binding: 3, resource: this.msLut.createView() },
       { binding: 5, resource: this.skyCube.createView({ dimension: '2d-array' }) },
     ], SKY_FACE, SKY_FACE, 6);
+    pass.end();
+  }
+
+  private runGroundShadow(encoder: GPUCommandEncoder): void {
+    const pass = encoder.beginComputePass({ label: 'ground shadow' });
+    pass.setPipeline(this.shadowPipeline);
+    pass.setBindGroup(0, this.device.createBindGroup({
+      layout: this.shadowPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.paramsBuffer } },
+        { binding: 1, resource: this.repeatSampler },
+        { binding: 2, resource: this.clampSampler },
+        { binding: 3, resource: this.shapeTex.createView() },
+        { binding: 4, resource: this.detailTex.createView() },
+        { binding: 5, resource: this.weatherTex.createView() },
+        { binding: 11, resource: this.shadowTex.createView() },
+      ],
+    }));
+    pass.dispatchWorkgroups(512 / 8, 512 / 8);
     pass.end();
   }
 
