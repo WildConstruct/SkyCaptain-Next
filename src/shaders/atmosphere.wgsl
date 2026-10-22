@@ -170,12 +170,8 @@ fn sky_radiance(dir: vec3f) -> vec3f {
     lum += throughput * (s_in - s_in * step_t) / max(m.extinction, vec3f(1e-6));
     throughput *= step_t;
   }
-  if (extent.y > 0.5) {
-    let hit = origin + dir * extent.x;
-    let n = normalize(hit);
-    let sun_t = transmittance_to_top(length(hit), dot(n, sun));
-    lum += throughput * sun_t * max(dot(n, sun), 0.0) * params.misc.y / PI;
-  }
+  // Toward the ground this is only the air in front of it: the ground itself is shaded in
+  // the cloud pass (clouds.wgsl ground_radiance), which knows the cloud shadows.
   return lum * illum;
 }
 

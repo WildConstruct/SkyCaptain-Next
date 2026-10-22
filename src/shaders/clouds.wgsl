@@ -223,6 +223,80 @@ fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
   return scattering;
 }
 
+// --- Ground ------------------------------------------------------------------------------
+// The ground is shaded here rather than in the sky pass because its light depends on the
+// clouds: direct sun through the cloud above each ground point (cloud shadows), and sky
+// light dimmed by the cloud overhead. Light that diffuses through cloud is kept with the
+// two-stream slab estimate T = 1 / (1 + 0.75 (1 - g) tau), so overcast ground stays dimly
+// lit rather than black. The result is written into the cloud cube as radiance with
+// transmittance 1, so the composite adds it on top of the air in front (sky cube).
+
+const GROUND_SHADOW_STEPS: i32 = 24;
+const GROUND_SKY_STEPS: i32 = 12;
+// Effective asymmetry for diffuse transmission through cloud.
+const CLOUD_G_DIFFUSE: f32 = 0.85;
+
+fn transmittance_lut_at(r: f32, mu: f32) -> vec3f {
+  let uv = vec2f(mu * 0.5 + 0.5, clamp((r - ground_radius()) / (params.layer.w - ground_radius()), 0.0, 1.0));
+  return textureSampleLevel(transmittance_lut, clamp_sampler, uv, 0.0).rgb;
+}
+
+// Coarse optical depth through the cloud layer from p along dir (no detail noise).
+fn layer_optical_depth(p: vec3f, dir: vec3f, steps: i32, jitter: f32) -> f32 {
+  let t_bottom = ray_sphere(p, dir, ground_radius() + cloud_bottom()).y;
+  let t_top = ray_sphere(p, dir, ground_radius() + cloud_top()).y;
+  if (t_top <= 0.0) { return 0.0; }
+  let t0 = max(t_bottom, 0.0);
+  let t1 = min(t_top, t0 + 60.0);
+  if (t1 <= t0) { return 0.0; }
+  let dt = (t1 - t0) / f32(steps);
+  var depth = 0.0;
+  for (var i = 0; i < steps; i++) {
+    depth += media_at(p + dir * (t0 + (f32(i) + jitter) * dt), 1.0, 1.0) * dt;
+  }
+  return depth;
+}
+
+fn diffuse_transmittance(tau: f32) -> f32 {
+  return 1.0 / (1.0 + 0.75 * (1.0 - CLOUD_G_DIFFUSE) * tau);
+}
+
+fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
+  let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
+  let t_ground = ray_sphere(origin, dir, ground_radius()).x;
+  if (t_ground <= 0.0) { return vec3f(0.0); }
+  let g = origin + dir * t_ground;
+  let n = normalize(g);
+  let sun = params.sun_dir.xyz;
+  let illum = params.sun_color.rgb * params.sun_dir.w;
+
+  // Clear-sky light on level ground: sun through the air, and the sky dome.
+  let cos_sun = max(dot(n, sun), 0.0);
+  let sun_h = illum * transmittance_lut_at(length(g), dot(n, sun)) * cos_sun;
+  let sky_top = textureSampleLevel(sky_tex, clamp_sampler, vec3f(0.0, 1.0, 0.0), 0.0).rgb;
+  let sky_side = (textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(1.0, 0.25, 0.0)), 0.0).rgb
+                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(-1.0, 0.25, 0.0)), 0.0).rgb
+                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(0.0, 0.25, 1.0)), 0.0).rgb
+                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(0.0, 0.25, -1.0)), 0.0).rgb) * 0.25;
+  let sky_irradiance = PI * (sky_top * 0.5 + sky_side * 0.5);
+
+  // Cloud above this point: toward the sun for the shadow, straight up for the sky light.
+  var tau_sun = 0.0;
+  if (cos_sun > 0.0) { tau_sun = layer_optical_depth(g, sun, GROUND_SHADOW_STEPS, jitter.x); }
+  let tau_up = layer_optical_depth(g, n, GROUND_SKY_STEPS, jitter.y);
+  let t_up = diffuse_transmittance(tau_up);
+  // Direct beam, plus the part of the beam the cloud above scatters down diffusely.
+  let sun_light = sun_h * (exp(-tau_sun) + max(t_up - exp(-tau_up), 0.0));
+  let irradiance = sun_light + sky_irradiance * t_up;
+
+  // Air between the eye and the ground point (both rays turned upward, so the LUT applies).
+  let up = -dir;
+  let air = clamp(
+    transmittance_lut_at(length(g), dot(n, up)) / max(transmittance_lut_at(length(origin), dot(normalize(origin), up)), vec3f(1e-6)),
+    vec3f(0.0), vec3f(1.0));
+  return air * params.misc.y / PI * irradiance;
+}
+
 struct MarchResult {
   scatter: vec3f,
   transmittance: f32,
@@ -232,7 +306,10 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   var result: MarchResult;
   result.scatter = vec3f(0.0);
   result.transmittance = 1.0;
-  if (dir.y <= 0.0) { return result; }
+  if (dir.y <= 0.0) {
+    result.scatter = ground_radiance(dir, hash33(seed + vec3u(0u, 0u, 4242u)));
+    return result;
+  }
 
   let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
   let t_near = ray_sphere(origin, dir, ground_radius() + cloud_bottom()).y;
@@ -488,7 +565,10 @@ fn sample_phase(wo: vec3f, rng: ptr<function, Rng>) -> vec3f {
 
 fn reference_path(dir0: vec3f, rng: ptr<function, Rng>) -> vec4f {
   let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
-  if (dir0.y <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  if (dir0.y <= 0.0) {
+    // The ground uses the same analytic shading as the fast renderer.
+    return vec4f(ground_radiance(dir0, vec3f(rng_next(rng), rng_next(rng), rng_next(rng))), 1.0);
+  }
   let span0 = shell_interval(origin, dir0);
   if (span0.y <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
   let majorant = max(params.cloud.z, 1e-3);
