@@ -156,6 +156,24 @@ EXR/HDR files (`Name.0001.exr`, …) into a folder you pick (Chrome and Edge) or
 downloads elsewhere. `tools/smoke-animate.mjs` checks the recipe, the sky file and a short
 sequence, including that a frame re-rendered on its own matches.
 
+## Ground
+
+The ground below the horizon is shaded with the clouds, so an HDRI's lower half lights a
+scene plausibly:
+
+- **Sky and cloud light:** after each frame, the environment as seen from the ground (sky
+  through the clouds plus the light the clouds scatter) is integrated over the upper
+  hemisphere (`downwelling.wgsl`). Overcast ground is lit evenly by the grey dome; sunset
+  ground takes the colour of the cloud undersides.
+- **Direct sun with cloud shadows:** a 512² shadow map over 12 km around the eye holds
+  the sun's transmittance through the cloud layer, marched once per change.
+- **Ground albedo** (Expert) defaults to 0.25, a typical average for land.
+
+The eye is 2 m up, so almost all of the visible ground is within ~100 m of the camera
+and the far ground is a thin strip at the horizon. The ground therefore shows whether the
+camera's own spot is in sun or cloud shadow, as a real HDRI shot there would; in an
+animation it brightens and dims as cloud shadows pass over.
+
 ## Looks and Moniker names
 
 ![Vibes](docs/look/vibes-001.png)
@@ -196,5 +214,5 @@ time of day, mood and scene. `docs/moniker.md` lists every slot and word, and
 7. **Export and documents.** Done: EXR/HDR export and sky `.wcx` save/open.
 8. **Looks.** Done: six factory looks, saved `.wcx` looks named by Moniker, and Moniker names for skies.
 9. **Animation.** Done: wind drift, cloud evolution, sun moves, sequence export.
-10. **Ground and skylight.** The ground is lit only by the sun today, so low-sun skies have a
-   near-black ground. Add sky irradiance and cloud shadows on the ground.
+10. **Ground and skylight.** Done: the ground is lit by the rendered sky and clouds, plus direct sun
+   through a cloud shadow map.

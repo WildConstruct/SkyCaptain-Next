@@ -30,7 +30,7 @@ marked `skyCaptain:` in the shaders and listed below.
 | **Per-type cloud height** from the type channel: stratus 0.35 km, cumulus at the layer height, towers up to the tower height. Takram uses fixed low, mid and high layers. | Storm cells and fronts need towers in one layer. | Same shape-altering function (bias 0.35) and density profile within each cloud's own height. |
 | **Cone march for long-range sun shadowing.** Takram adds optical depth from a beer shadow map (BSM) beyond its 2 short steps. We march on with growing coarse steps (4–6, from the quality tier). | No shadow map yet. | Approximate self-shadowing past about 300 m. A BSM over our fixed eye is a candidate upgrade. |
 | **Sky and ground light from our sky cube.** Takram uses precomputed scalar irradiance (Bruneton). | We already render the sky cube. | Mean sky radiance is estimated from five cube samples. |
-| **Ground albedo is the scene's albedo setting.** Takram uses a constant 0.3. | Matches our atmosphere's ground. | Darker cloud bases by default (0.12). |
+| **Ground albedo is the scene's albedo setting.** Takram uses a constant 0.3. | Matches our atmosphere's ground. | Default 0.25, a typical average for land. |
 | **Aerial perspective is a haze fade at the front depth.** Takram applies full aerial perspective there. | We have no aerial-perspective LUT yet. | Distant clouds fade less physically. |
 | **No high cirrus layer.** | Not ported yet. | To do. |
 | **No temporal reprojection or STBN.** We accumulate jittered samples per cube texel instead. | Fixed-eye cube rendering converges without reprojection. | Same converged image, different noise while it refines. |

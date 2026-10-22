@@ -60,7 +60,7 @@ export const DEFAULTS: Settings = {
   sunAzimuth: 35,
   sunIntensity: 20,
   haze: 30,
-  groundAlbedo: 0.12,
+  groundAlbedo: 0.25,
   coverage: 0.35,
   typeBias: 0,
   density: 200,
