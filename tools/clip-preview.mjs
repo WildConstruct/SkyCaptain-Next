@@ -1,14 +1,14 @@
 // Renders a camera-view preview clip of an animation as a GIF: each frame is converged in
 // the viewport at the animation time, then captured. For looking at motion, not for
 // delivery (use Export sequence for that).
-// Usage: node tools/clip-preview.mjs <out.gif> [query string] [frames] [animation JSON]
+// Usage: node tools/clip-preview.mjs <out.gif> [query string] [frames] [animation JSON] [shape layers JSON]
 // Needs the dev server and python3 with Pillow.
 import { chromium } from 'playwright-core';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-const [out = 'shots/clip.gif', query = '', framesArg = '12', animJson = '{}'] = process.argv.slice(2);
+const [out = 'shots/clip.gif', query = '', framesArg = '12', animJson = '{}', shapesJson = '[]'] = process.argv.slice(2);
 const frames = Number(framesArg);
 const dir = join(dirname(out), 'clip-frames');
 mkdirSync(dir, { recursive: true });
@@ -20,10 +20,11 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.goto(`${process.env.SKY_URL ?? 'http://127.0.0.1:5173/'}?headless=1${query ? `&${query}` : ''}`);
 await page.waitForFunction(() => window.skyAnimate);
-const duration = await page.evaluate((json) => {
+const duration = await page.evaluate(([json, shapes]) => {
+  for (const shape of JSON.parse(shapes)) window.skyShapes.add(shape);
   window.skyAnimate.value = { ...window.skyAnimate.value, ...JSON.parse(json) };
   return window.skyAnimate.value.duration;
-}, animJson);
+}, [animJson, shapesJson]);
 const paths = [];
 for (let i = 0; i < frames; i++) {
   const t = (duration * i) / Math.max(1, frames - 1);
