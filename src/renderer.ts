@@ -154,7 +154,7 @@ export class Renderer {
     this.exportPipeline = compute(module(exportWgsl, 'export'), 'composite');
     this.downwellingPipeline = compute(module(downwellingWgsl, 'downwelling'), 'integrate');
     this.shadowPipeline = compute(cloudModule, 'ground_shadow');
-    this.shadowTex = device.createTexture({ size: [512, 512], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
+    this.shadowTex = device.createTexture({ size: [512, 512], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
     this.downwellingBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     this.displayPipeline = device.createRenderPipeline({
       layout: 'auto',
@@ -560,6 +560,27 @@ export class Renderer {
   }
 
   /** Reads the weather map back (RGBA8, row-major, WEATHER_SIZE square) for the minimap. */
+  /** Reads the ground cloud-shadow map back (sun transmittance, 512 square over 12 km). Tools only. */
+  async readGroundShadow(): Promise<{ size: number; data: Float32Array }> {
+    const d = this.device;
+    const size = 512;
+    const bytesPerRow = size * 8;
+    const buffer = d.createBuffer({ size: bytesPerRow * size, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const encoder = d.createCommandEncoder();
+    encoder.copyTextureToBuffer({ texture: this.shadowTex }, { buffer, bytesPerRow }, [size, size]);
+    d.queue.submit([encoder.finish()]);
+    await buffer.mapAsync(GPUMapMode.READ);
+    const half = new Uint16Array(buffer.getMappedRange());
+    const data = new Float32Array(size * size);
+    for (let i = 0; i < data.length; i++) {
+      const h = half[i * 4];
+      const e = (h >> 10) & 31, m = h & 1023;
+      data[i] = e === 0 ? (m / 1024) * 2 ** -14 : 2 ** (e - 15) * (1 + m / 1024);
+    }
+    buffer.destroy();
+    return { size, data };
+  }
+
   async readWeather(): Promise<{ size: number; data: Uint8Array }> {
     const d = this.device;
     const bytesPerRow = WEATHER_SIZE * 4;

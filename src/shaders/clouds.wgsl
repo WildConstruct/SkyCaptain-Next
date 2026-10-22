@@ -197,8 +197,7 @@ fn march_optical_depth(origin: vec3f, dir: vec3f, max_iterations: i32, mip: f32,
 }
 
 // skyCaptain: Takram adds the optical depth beyond the short march from a beer shadow
-// map. We have no shadow map yet, so march on toward the sun with growing steps and
-// coarse density (no detail) for params.march.y steps.
+// map. We march on toward the sun with growing steps for params.march.y steps.
 fn far_optical_depth(origin: vec3f, start: f32, jitter: f32) -> f32 {
   let sun = params.sun_dir.xyz;
   let steps = i32(params.march.y);
@@ -208,7 +207,8 @@ fn far_optical_depth(origin: vec3f, start: f32, jitter: f32) -> f32 {
   for (var i = 0; i < steps; i++) {
     let p = origin + sun * t;
     if (length(p) - ground_radius() >= cloud_top()) { break; }
-    depth += media_at(p, 1.0, 1.0) * ds;
+    // With detail: coarse density keeps the thin fringe that detail erodes, which over-darkens.
+    depth += media_at(p, 0.0, 0.0) * ds;
     t += ds;
     ds *= 1.8;
   }
@@ -249,7 +249,9 @@ fn transmittance_lut_at(r: f32, mu: f32) -> vec3f {
   return textureSampleLevel(transmittance_lut, clamp_sampler, uv, 0.0).rgb;
 }
 
-// Coarse optical depth through the cloud layer from p along dir (no detail noise).
+// Optical depth through the cloud layer from p along dir, with detail. (Coarse density is
+// not a safe shortcut: Takram's detail step erodes the thin fringe of every cloud to zero,
+// while coarse density keeps it as a faint fog that over a 10 km path shadows everything.)
 fn layer_optical_depth(p: vec3f, dir: vec3f, steps: i32, jitter: f32) -> f32 {
   let t_bottom = ray_sphere(p, dir, ground_radius() + cloud_bottom()).y;
   let t_top = ray_sphere(p, dir, ground_radius() + cloud_top()).y;
@@ -260,7 +262,7 @@ fn layer_optical_depth(p: vec3f, dir: vec3f, steps: i32, jitter: f32) -> f32 {
   let dt = (t1 - t0) / f32(steps);
   var depth = 0.0;
   for (var i = 0; i < steps; i++) {
-    depth += media_at(p + dir * (t0 + (f32(i) + jitter) * dt), 1.0, 1.0) * dt;
+    depth += media_at(p + dir * (t0 + (f32(i) + jitter) * dt), 0.0, 0.0) * dt;
   }
   return depth;
 }
