@@ -1,3 +1,4 @@
 node_modules/
 dist/
 shots/
+tools/.run-*.mjs
