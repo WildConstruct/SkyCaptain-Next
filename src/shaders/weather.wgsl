@@ -6,8 +6,9 @@
 // Local weather feeds Takram's coverage function (clouds.wgsl), which turns smooth bumps
 // into domed clouds and flat plateaus into flat-topped walls. So nothing writes plateaus:
 // shapes and paint author an *amount* of cloud, and that amount scales a field of Worley
-// cells (one soft bump per cloud), as Takram's own local weather texture does. Sheets
-// (haze) are the exception and stay flat on purpose.
+// cells (one soft bump per cloud), as Takram's own local weather texture does. The
+// exceptions are written as direct weather: haze sheets (flat on purpose) and storm cores
+// (one peaked dome, so one big tower that tapers with height).
 // The smudge warp displaces where the whole composite is evaluated, so it drags
 // background, shapes and paint together.
 
@@ -68,7 +69,7 @@ fn shape_noise(xz: vec2f, feature_km: f32, seed: f32) -> f32 {
 
 struct Cell {
   amount: f32,   // authored cloud amount, scales the cell field
-  sheet: f32,    // authored flat layer (haze), not broken into cells
+  direct: f32,   // authored weather used as is, not broken into cells (haze, storm cores)
   clear: f32,    // forced clear sky, which also holds off the global coverage
   kind: f32,
   density: f32,
@@ -156,13 +157,13 @@ fn apply_shape(cell: Cell, shape: Shape, xz: vec2f) -> Cell {
   let w = shape.strength * (1.0 - smoothstep(0.65, 1.0, l.d));
   var out = cell;
   var amount = 0.0;
-  var sheet = 0.0;
+  var direct = 0.0;
   var kind = 0.5;
   var dens = 1.0;
 
   if (shape.kind == SHAPE_CLEAR_HOLE) {
     out.amount = cell.amount * (1.0 - w);
-    out.sheet = cell.sheet * (1.0 - w);
+    out.direct = cell.direct * (1.0 - w);
     out.clear = max(cell.clear, w);
     return out;
   } else if (shape.kind == SHAPE_CUMULUS_FIELD) {
@@ -170,11 +171,11 @@ fn apply_shape(cell: Cell, shape: Shape, xz: vec2f) -> Cell {
     kind = mix(0.3, 0.55, shape_noise(xz, 9.0, shape.seed + 3.0));
     dens = 0.9;
   } else if (shape.kind == SHAPE_STORM_CELL) {
-    // A peaked core (a cluster of towers, tallest in the middle) and a broken ring of
-    // outflow cumulus.
-    let core = shape.strength * clamp(1.0 - l.d * l.d, 0.0, 1.0);
-    let ring = shape.strength * exp(-pow((l.d - 1.25) / 0.22, 2.0)) * 0.7;
-    amount = max(core, ring);
+    // One peaked core (a single tower, tallest in the middle) and a broken ring of
+    // outflow cumulus cells.
+    let core = shape.strength * clamp(1.0 - l.d * l.d, 0.0, 1.0) * mix(0.85, 1.0, shape_noise(xz, 4.0, shape.seed));
+    direct = core;
+    amount = shape.strength * exp(-pow((l.d - 1.25) / 0.22, 2.0)) * 0.8;
     kind = mix(0.5, 1.0, smoothstep(0.0, 0.7, core));
     dens = 1.0;
   } else if (shape.kind == SHAPE_FRONT) {
@@ -183,15 +184,15 @@ fn apply_shape(cell: Cell, shape: Shape, xz: vec2f) -> Cell {
     kind = mix(0.2, 0.85, smoothstep(-0.6, 0.6, l.across));
     dens = 0.95;
   } else if (shape.kind == SHAPE_HAZE_SHEET) {
-    sheet = w * mix(0.55, 0.75, shape_noise(xz, 12.0, shape.seed));
+    direct = w * mix(0.55, 0.75, shape_noise(xz, 12.0, shape.seed));
     kind = 0.05;
     dens = 0.35;
   }
   if (shape.type_override >= 0.0) { kind = shape.type_override; }
 
   out.amount = max(cell.amount, amount);
-  out.sheet = max(cell.sheet, sheet);
-  let blend = clamp(max(amount, sheet) * 1.5, 0.0, 1.0);
+  out.direct = max(cell.direct, direct);
+  let blend = clamp(max(amount, direct) * 1.5, 0.0, 1.0);
   out.kind = mix(cell.kind, kind, blend);
   out.density = mix(cell.density, dens, blend);
   return out;
@@ -215,7 +216,7 @@ fn generate(@builtin(global_invocation_id) id: vec3u) {
   let background = max(bg.x, bg.y) * shapes.base_amount;
   var cell: Cell;
   cell.amount = 0.0;
-  cell.sheet = 0.0;
+  cell.direct = 0.0;
   cell.clear = 0.0;
   // Mid cells are taller; background stays at or below cumulus congestus.
   cell.kind = mix(0.3, 0.55, bg.y / max(bg.x + bg.y, 1e-3)) * step(1e-3, bg.x + bg.y);
@@ -228,12 +229,12 @@ fn generate(@builtin(global_invocation_id) id: vec3u) {
   // Paint: Cloud adds amount, Clear removes it and forces clear sky (paint.r < 0).
   let paint = textureSampleLevel(paint_tex, layer_sampler, uv, 0.0);
   cell.amount = clamp(cell.amount + paint.r, 0.0, 1.0);
-  cell.sheet = clamp(cell.sheet + min(paint.r, 0.0), 0.0, 1.0);
+  cell.direct = clamp(cell.direct + min(paint.r, 0.0), 0.0, 1.0);
   cell.clear = clamp(max(cell.clear, -paint.r), 0.0, 1.0);
   cell.kind = mix(cell.kind, paint.g, clamp(paint.b, 0.0, 1.0));
   cell.density = clamp(cell.density + paint.a, 0.05, 1.0);
 
   let open = 1.0 - cell.clear;
-  let local_weather = max(max(background * open, cell.amount * authored_cells(xz, cell.kind, seed_u)), cell.sheet);
+  let local_weather = max(max(background * open, cell.amount * authored_cells(xz, cell.kind, seed_u)), cell.direct);
   textureStore(weather_out, id.xy, vec4f(local_weather, cell.kind, cell.density, open));
 }

@@ -77,12 +77,10 @@ fn cloud_height(kind: f32) -> f32 {
   return mix(cumulus_height(), cloud_top() - cloud_bottom(), (kind - 0.5) * 2.0);
 }
 
-fn shape_altering(hf: f32, kind: f32) -> f32 {
-  // Semi-circle that rounds clouds toward the top.
-  // skyCaptain: towers raise the bias toward 1 so the widest point climbs to mid-height
-  // and they stand as columns; Takram's 0.35 (widest near the base) suits cumulus.
-  let bias = mix(SHAPE_ALTERING_BIAS, 0.9, clamp((kind - 0.5) * 2.0, 0.0, 1.0));
-  let x = clamp(pow(hf, bias) * 2.0 - 1.0, -1.0, 1.0);
+fn shape_altering(hf: f32) -> f32 {
+  // Semi-circle that rounds clouds toward the top. With peaked local weather (weather.wgsl)
+  // this also tapers towers: only the strongest weather reaches the top.
+  let x = clamp(pow(hf, SHAPE_ALTERING_BIAS) * 2.0 - 1.0, -1.0, 1.0);
   return 1.0 - x * x;
 }
 
@@ -110,7 +108,7 @@ fn sample_weather(p: vec3f, altitude: f32) -> Weather {
   // (density stays below 1), so authored clouds never set solid. Clear and clear holes
   // hold the global coverage off (weather alpha).
   let coverage = max(params.cloud.x * tex.a, AUTHORED_COVERAGE * local_weather);
-  let factor = 1.0 - coverage * shape_altering(w.hf, kind);
+  let factor = 1.0 - coverage * shape_altering(w.hf);
   w.density = remap_clamped(mix(local_weather, 1.0, COVERAGE_FILTER_WIDTH), factor, factor + COVERAGE_FILTER_WIDTH);
   w.scale = tex.b;
   return w;
