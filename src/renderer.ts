@@ -4,6 +4,7 @@ import noiseBakeWgsl from './shaders/noise-bake.wgsl?raw';
 import weatherWgsl from './shaders/weather.wgsl?raw';
 import atmosphereWgsl from './shaders/atmosphere.wgsl?raw';
 import cloudsWgsl from './shaders/clouds.wgsl?raw';
+import downwellingWgsl from './shaders/downwelling.wgsl?raw';
 import displayWgsl from './shaders/display.wgsl?raw';
 import exportWgsl from './shaders/export.wgsl?raw';
 import { Invalidation, QUALITY, Quality, Settings, packParams } from './settings';
@@ -63,6 +64,10 @@ export class Renderer {
   private referencePipeline: GPUComputePipeline;
   private displayPipeline: GPURenderPipeline;
   private exportPipeline: GPUComputePipeline;
+  private downwellingPipeline: GPUComputePipeline;
+  /** Downwelling irradiance onto the ground, integrated from the view's cubes (16 bytes). */
+  private downwellingBuffer: GPUBuffer;
+  private downwellingBindGroup!: GPUBindGroup;
   /** While an export runs, the interactive view stops refining clouds. */
   private exporting = false;
 
@@ -144,6 +149,8 @@ export class Renderer {
     this.cloudPipeline = compute(cloudModule, 'render');
     this.referencePipeline = compute(cloudModule, 'render_reference');
     this.exportPipeline = compute(module(exportWgsl, 'export'), 'composite');
+    this.downwellingPipeline = compute(module(downwellingWgsl, 'downwelling'), 'integrate');
+    this.downwellingBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     this.displayPipeline = device.createRenderPipeline({
       layout: 'auto',
       vertex: { module: displayModule, entryPoint: 'vs' },
@@ -237,6 +244,7 @@ export class Renderer {
     this.allocatedFace = face;
 
     this.cloudBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube);
+    this.downwellingBindGroup = this.downwellingBindGroupFor(this.cloudCube, this.downwellingBuffer);
     this.referenceBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube, this.referencePipeline);
     this.displayBindGroup = this.device.createBindGroup({
       layout: this.displayPipeline.getBindGroupLayout(0),
@@ -251,7 +259,7 @@ export class Renderer {
     });
   }
 
-  private cloudBindGroupFor(params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture, pipeline = this.cloudPipeline): GPUBindGroup {
+  private cloudBindGroupFor(params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture, pipeline = this.cloudPipeline, downwelling = this.downwellingBuffer): GPUBindGroup {
     return this.device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
@@ -265,8 +273,30 @@ export class Renderer {
         { binding: 7, resource: this.skyCube.createView({ dimension: 'cube' }) },
         { binding: 8, resource: { buffer: accum } },
         { binding: 9, resource: cube.createView({ dimension: '2d-array' }) },
+        { binding: 10, resource: { buffer: downwelling } },
       ],
     });
+  }
+
+  private downwellingBindGroupFor(cube: GPUTexture, buffer: GPUBuffer): GPUBindGroup {
+    return this.device.createBindGroup({
+      layout: this.downwellingPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: this.clampSampler },
+        { binding: 1, resource: this.skyCube.createView({ dimension: 'cube' }) },
+        { binding: 2, resource: cube.createView({ dimension: 'cube' }) },
+        { binding: 3, resource: { buffer } },
+      ],
+    });
+  }
+
+  /** Integrates the ground's downwelling light from a cloud cube (one workgroup). */
+  private integrateDownwelling(encoder: GPUCommandEncoder, group: GPUBindGroup): void {
+    const pass = encoder.beginComputePass({ label: 'downwelling' });
+    pass.setPipeline(this.downwellingPipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(1);
+    pass.end();
   }
 
   /**
@@ -288,6 +318,7 @@ export class Renderer {
     const out = d.createTexture({ size: [width, height], format: 'rgba32float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
     const bytesPerRow = width * 16;
     const readback = d.createBuffer({ size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const downwelling = d.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     try {
       // Apply any pending sky or weather edits first.
       const prep = d.createCommandEncoder();
@@ -295,7 +326,13 @@ export class Renderer {
       this.flushPending(prep);
       d.queue.submit([prep.finish()]);
 
-      const bindGroup = this.cloudBindGroupFor(params, accum, cube);
+      // The export cube starts empty, so its ground starts from the view's downwelling light
+      // and then follows its own cube frame by frame.
+      const seed = d.createCommandEncoder();
+      seed.copyBufferToBuffer(this.downwellingBuffer, 0, downwelling, 0, 16);
+      d.queue.submit([seed.finish()]);
+      const bindGroup = this.cloudBindGroupFor(params, accum, cube, this.cloudPipeline, downwelling);
+      const downwellingGroup = this.downwellingBindGroupFor(cube, downwelling);
       const groups = Math.ceil(face / 4 / 8);
       const total = 16 * samples;
       for (let frame = 0; frame < total; frame++) {
@@ -306,6 +343,7 @@ export class Renderer {
         pass.setBindGroup(0, bindGroup);
         pass.dispatchWorkgroups(groups, groups, 6);
         pass.end();
+        this.integrateDownwelling(encoder, downwellingGroup);
         d.queue.submit([encoder.finish()]);
         // One frame in flight: keeps the browser responsive and each submission short.
         await d.queue.onSubmittedWorkDone();
@@ -335,6 +373,7 @@ export class Renderer {
       return { width, height, data };
     } finally {
       readback.destroy();
+      downwelling.destroy();
       out.destroy();
       cube.destroy();
       accum.destroy();
@@ -428,6 +467,7 @@ export class Renderer {
       const groups = Math.ceil(quality.faceSize / 4 / 8);
       pass.dispatchWorkgroups(groups, groups, 6);
       pass.end();
+      this.integrateDownwelling(encoder, this.downwellingBindGroup);
       if (ts) {
         encoder.resolveQuerySet(ts.query, 0, 2, ts.resolve, 0);
         encoder.copyBufferToBuffer(ts.resolve, 0, ts.read, 0, 16);

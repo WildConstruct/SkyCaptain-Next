@@ -14,6 +14,8 @@
 @group(0) @binding(7) var sky_tex: texture_cube<f32>;
 @group(0) @binding(8) var<storage, read_write> accum: array<vec2u>;
 @group(0) @binding(9) var cloud_out: texture_storage_2d_array<rgba16float, write>;
+// Downwelling irradiance from the previous frame's environment (downwelling.wgsl).
+@group(0) @binding(10) var<storage, read> downwelling: vec4f;
 
 const BAYER_OFFSETS = array<vec2u, 16>(
   vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
@@ -225,16 +227,15 @@ fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
 
 // --- Ground ------------------------------------------------------------------------------
 // The ground is shaded here rather than in the sky pass because its light depends on the
-// clouds: direct sun through the cloud above each ground point (cloud shadows), and sky
-// light dimmed by the cloud overhead. Light that diffuses through cloud is kept with the
-// two-stream slab estimate T = 1 / (1 + 0.75 (1 - g) tau), so overcast ground stays dimly
-// lit rather than black. The result is written into the cloud cube as radiance with
-// transmittance 1, so the composite adds it on top of the air in front (sky cube).
+// clouds. Direct sun reaches each ground point through the cloud above it (cloud shadows,
+// soft from the jittered samples). Everything else comes from the environment as seen from
+// the ground: the sky through the clouds plus the light the clouds scatter, integrated
+// over the upper hemisphere after each frame (downwelling.wgsl). So overcast ground is lit
+// by the grey dome, and sunset ground glows with the cloud undersides. The result goes
+// into the cloud cube as radiance with transmittance 1, so the composite adds it on top of
+// the air in front of the ground (sky cube).
 
 const GROUND_SHADOW_STEPS: i32 = 24;
-const GROUND_SKY_STEPS: i32 = 12;
-// Effective asymmetry for diffuse transmission through cloud.
-const CLOUD_G_DIFFUSE: f32 = 0.85;
 
 fn transmittance_lut_at(r: f32, mu: f32) -> vec3f {
   let uv = vec2f(mu * 0.5 + 0.5, clamp((r - ground_radius()) / (params.layer.w - ground_radius()), 0.0, 1.0));
@@ -257,10 +258,6 @@ fn layer_optical_depth(p: vec3f, dir: vec3f, steps: i32, jitter: f32) -> f32 {
   return depth;
 }
 
-fn diffuse_transmittance(tau: f32) -> f32 {
-  return 1.0 / (1.0 + 0.75 * (1.0 - CLOUD_G_DIFFUSE) * tau);
-}
-
 fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
   let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
   let t_ground = ray_sphere(origin, dir, ground_radius()).x;
@@ -270,24 +267,13 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
   let sun = params.sun_dir.xyz;
   let illum = params.sun_color.rgb * params.sun_dir.w;
 
-  // Clear-sky light on level ground: sun through the air, and the sky dome.
-  let cos_sun = max(dot(n, sun), 0.0);
-  let sun_h = illum * transmittance_lut_at(length(g), dot(n, sun)) * cos_sun;
-  let sky_top = textureSampleLevel(sky_tex, clamp_sampler, vec3f(0.0, 1.0, 0.0), 0.0).rgb;
-  let sky_side = (textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(1.0, 0.25, 0.0)), 0.0).rgb
-                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(-1.0, 0.25, 0.0)), 0.0).rgb
-                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(0.0, 0.25, 1.0)), 0.0).rgb
-                + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(0.0, 0.25, -1.0)), 0.0).rgb) * 0.25;
-  let sky_irradiance = PI * (sky_top * 0.5 + sky_side * 0.5);
-
-  // Cloud above this point: toward the sun for the shadow, straight up for the sky light.
-  var tau_sun = 0.0;
-  if (cos_sun > 0.0) { tau_sun = layer_optical_depth(g, sun, GROUND_SHADOW_STEPS, jitter.x); }
-  let tau_up = layer_optical_depth(g, n, GROUND_SKY_STEPS, jitter.y);
-  let t_up = diffuse_transmittance(tau_up);
-  // Direct beam, plus the part of the beam the cloud above scatters down diffusely.
-  let sun_light = sun_h * (exp(-tau_sun) + max(t_up - exp(-tau_up), 0.0));
-  let irradiance = sun_light + sky_irradiance * t_up;
+  let cos_sun = dot(n, sun);
+  var direct = vec3f(0.0);
+  if (cos_sun > 0.0) {
+    let shadow = exp(-layer_optical_depth(g, sun, GROUND_SHADOW_STEPS, jitter.x));
+    direct = illum * transmittance_lut_at(length(g), cos_sun) * cos_sun * shadow;
+  }
+  let irradiance = direct + downwelling.rgb;
 
   // Air between the eye and the ground point (both rays turned upward, so the LUT applies).
   let up = -dir;
