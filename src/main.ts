@@ -6,6 +6,8 @@ import { Stroke, ToolState } from './ui/tools';
 import { BrushPanel } from './ui/brush-panel';
 import { SkyGraph } from './psg';
 import { PsgPanel } from './ui/psg-panel';
+import { ExportPanel, download } from './ui/export-panel';
+import { paintTilesOf, parseSky, saveSky } from './document';
 import { viewUniforms } from './camera';
 import { ShapeKind, ShapeLayer, ShapeStore, createShape } from './shapes';
 import { SkyOverlay } from './ui/sky-overlay';
@@ -168,11 +170,68 @@ async function main(): Promise<void> {
   header.append(quality, reroll);
   panel.append(header);
 
+  // Sky documents: settings, shapes, paint and graph in one file.
+  const docRow = document.createElement('div');
+  docRow.className = 'row actions';
+  const saveButton = document.createElement('button');
+  saveButton.textContent = 'Save sky';
+  const openButton = document.createElement('button');
+  openButton.textContent = 'Open sky…';
+  const openInput = document.createElement('input');
+  openInput.type = 'file';
+  openInput.accept = '.json,application/json';
+  openInput.hidden = true;
+  docRow.append(saveButton, openButton, openInput);
+  panel.append(docRow);
+  saveButton.onclick = () => download(`${fileStem()}.sky.json`, saveSky(settings, store.shapes, layers, skyGraph), 'application/json');
+  openButton.onclick = () => openInput.click();
+  openInput.onchange = async () => {
+    const file = openInput.files?.[0];
+    openInput.value = '';
+    if (!file) return;
+    try {
+      openSky(await file.text());
+    } catch (err) {
+      status.textContent = `Could not open ${file.name}: ${err instanceof Error ? err.message : err}`;
+    }
+  };
+
   const mapCanvas = document.createElement('canvas');
   mapCanvas.className = 'minimap';
   mapCanvas.title = 'Weather map. Drag shapes, handles resize and rotate, wheel zooms.';
   panel.append(mapCanvas);
   const minimap = new Minimap(mapCanvas, settings, store, tools, stroke);
+
+  function openSky(text: string): void {
+    const doc = parseSky(text);
+    const tiles = paintTilesOf(doc, layers.size);
+    for (const key of Object.keys(DEFAULTS) as (keyof Settings)[]) {
+      const v = doc.settings[key] ?? DEFAULTS[key];
+      if (key === 'quality') { settings.quality = v as QualityName; quality.value = settings.quality; }
+      else set(key, v as number);
+    }
+    renderer.update(settings, 'sky');
+    renderer.update(settings, 'weather');
+    store.selected = null;
+    store.replaceAll(doc.shapes);
+    layers.importTiles(tiles);
+    skyGraph.restore(doc.graph);
+    history.clear();
+  }
+  Object.assign(window, { skyOpen: openSky });
+
+  const exportSection = document.createElement('details');
+  const exportSummary = document.createElement('summary');
+  exportSummary.textContent = 'Export HDRI';
+  const exportRoot = document.createElement('div');
+  exportSection.append(exportSummary, exportRoot);
+  panel.append(exportSection);
+  const fileStem = () => {
+    const caption = skyGraph.last?.caption;
+    const slug = caption ? caption.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) : '';
+    return `skycaptain-${slug || new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}`;
+  };
+  new ExportPanel(exportRoot, renderer, fileStem);
 
   const graphSection = document.createElement('details');
   graphSection.open = true;

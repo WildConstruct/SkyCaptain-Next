@@ -78,3 +78,5 @@ button:hover, select:hover { border-color: var(--accent); }
 .holds li { grid-template-columns: auto 1fr; cursor: default; }
 .holds li.held span { color: var(--text); }
 .holds li span { color: var(--muted); }
+
+progress { width: 100%; accent-color: var(--accent); }

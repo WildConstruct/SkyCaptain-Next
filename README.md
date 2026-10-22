@@ -94,6 +94,34 @@ your hand-made ones; rerolls never touch hand-made shapes or paint. Details in
 [docs/psg-weather.md](docs/psg-weather.md). `node tools/smoke-psg.mjs` checks load,
 reroll, holds and undo.
 
+## Export and sky files
+
+![Exported HDRI](docs/look/export-001.png)
+
+**Export HDRI** renders the environment fresh at export quality and downloads a
+scene-linear lat-long image, with north at the centre and east to the right:
+- **Formats:** OpenEXR or Radiance `.hdr`.
+- **Sizes:** 1K, 2K or 4K.
+- **Quality:** 2, 8 or 16 samples per texel.
+- **How it renders:** clouds go into a dedicated cube (face = width ÷ 4, Ultra steps,
+  full convergence) and are composited with the same shaders as the view, with a
+  supersampled sun disc.
+- **EXR precision:** written as half float when everything fits, and as 32-bit float
+  when the sun exceeds the half range (it usually does), so the sun's energy is never
+  clamped.
+
+`tools/smoke-export.mjs` drives the button and checks every pixel. `tools/check-hdri.py`
+re-reads the files with the OpenEXR and OpenCV readers.
+
+**Save sky / Open sky** store the whole sky in one `.sky.json`:
+- settings and shape layers
+- paint, as sparse tiles (int16 paint, float32 smudge warp)
+- the sky graph, with its text, seed, holds and resolved values
+
+Opening restores the saved roll without re-evaluating, so a later edit to the graph
+can't change a saved sky. `tools/smoke-document.mjs` round-trips a sky and compares the
+GPU weather map.
+
 ## Roadmap
 
 1. **Look spike.** Done.
@@ -105,5 +133,5 @@ reroll, holds and undo.
    an example graph, reroll and holds.
 6. **Look polish.** Cumulonimbus anvils, ground shadows from clouds, horizon and
    ground model, edge albedo instead of powder.
-7. **Vibes and export.** Look presets (sun + atmosphere + clouds), lat-long
-   `.hdr`/`.exr` export from the cube, and a recipe/WCX document.
+7. **Export and documents.** Done: EXR/HDR export and `.sky.json` save/open.
+8. **Vibes.** Look presets (sun + atmosphere + clouds) and a WCX wrapper for the suite.

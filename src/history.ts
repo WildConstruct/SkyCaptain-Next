@@ -21,6 +21,13 @@ export class History {
     this.emit();
   }
 
+  /** Forgets all undo and redo steps (e.g. after opening a document). */
+  clear(): void {
+    this.undoStack = [];
+    this.redoStack = [];
+    this.emit();
+  }
+
   undo(): void {
     const entry = this.undoStack.pop();
     if (!entry) return;

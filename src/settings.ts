@@ -111,8 +111,7 @@ const EARTH_RADIUS_KM = 6360;
 const ATMOSPHERE_TOP_KM = 6460;
 const SUN_ANGULAR_RADIUS = 0.00465;
 
-export function packParams(s: Settings, frame: number): Float32Array<ArrayBuffer> {
-  const q = QUALITY[s.quality];
+export function packParams(s: Settings, frame: number, q: Quality = QUALITY[s.quality]): Float32Array<ArrayBuffer> {
   const sun = sunDirection(s);
   return new Float32Array([
     sun[0], sun[1], sun[2], s.sunIntensity,

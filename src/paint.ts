@@ -4,6 +4,7 @@
 // Strokes snapshot the 64x64 tiles they touch, so undo restores only what changed.
 
 import type { History, HistoryEntry } from './history';
+import { toHalf } from './half';
 
 export type BrushTool = 'cloud' | 'erase' | 'type' | 'density' | 'scatter' | 'smudge';
 
@@ -40,6 +41,17 @@ export const DEFAULT_BRUSH: BrushOptions = { tool: 'cloud', size: 6, flow: 0.35,
 export type LayerName = 'paint' | 'warp';
 
 const TILE = 64;
+
+/** Paint values lie in [-1, 1] and are stored as int16; warp (km) is stored exactly as float32. */
+const PAINT_SCALE = 32767;
+
+export interface PaintTile {
+  layer: LayerName;
+  tx: number;
+  ty: number;
+  /** TILE x TILE x 4, row-major: int16 (paint, scaled by PAINT_SCALE) or float32 (warp). */
+  data: Int16Array | Float32Array;
+}
 
 interface DirtyRect { x0: number; y0: number; x1: number; y1: number }
 
@@ -140,6 +152,46 @@ export class PaintLayers {
     this.dirty[name] = d
       ? { x0: Math.min(d.x0, x0), y0: Math.min(d.y0, y0), x1: Math.max(d.x1, x1), y1: Math.max(d.y1, y1) }
       : { x0, y0, x1, y1 };
+  }
+
+  /** Non-empty tiles of both layers (for documents). */
+  exportTiles(): PaintTile[] {
+    const tiles: PaintTile[] = [];
+    const per = this.size / TILE;
+    for (const name of ['paint', 'warp'] as LayerName[]) {
+      for (let ty = 0; ty < per; ty++) {
+        for (let tx = 0; tx < per; tx++) {
+          const data = this.copyTile(name, tx, ty);
+          if (!data.some((v) => v !== 0)) continue;
+          if (name === 'warp') {
+            tiles.push({ layer: name, tx, ty, data });
+            continue;
+          }
+          const q = new Int16Array(data.length);
+          for (let i = 0; i < data.length; i++) q[i] = Math.max(-32767, Math.min(32767, Math.round(data[i] * PAINT_SCALE)));
+          tiles.push({ layer: name, tx, ty, data: q });
+        }
+      }
+    }
+    return tiles;
+  }
+
+  /** Replaces both layers with the given tiles (not undoable; used when opening a document). */
+  importTiles(tiles: PaintTile[]): void {
+    this.paint.fill(0);
+    this.warp.fill(0);
+    for (const t of tiles) {
+      let data: Float32Array;
+      if (t.data instanceof Float32Array) {
+        data = t.data;
+      } else {
+        data = new Float32Array(t.data.length);
+        for (let i = 0; i < data.length; i++) data[i] = t.data[i] / PAINT_SCALE;
+      }
+      this.writeTile(t.layer, t.tx, t.ty, data);
+    }
+    this.markDirty('paint', 0, 0, this.size - 1, this.size - 1);
+    this.markDirty('warp', 0, 0, this.size - 1, this.size - 1);
   }
 
   /** Clears both layers as one undoable step. */
@@ -306,24 +358,4 @@ function mulberry32(seed: number): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-const f32 = new Float32Array(1);
-const u32 = new Uint32Array(f32.buffer);
-
-/** float32 -> IEEE half (round to nearest), enough for paint values in [-100, 100]. */
-export function toHalf(v: number): number {
-  f32[0] = v;
-  const x = u32[0];
-  const sign = (x >>> 16) & 0x8000;
-  let exp = ((x >>> 23) & 0xff) - 127 + 15;
-  let mant = x & 0x7fffff;
-  if (exp <= 0) {
-    if (exp < -10) return sign;
-    mant = (mant | 0x800000) >> (1 - exp);
-    return sign | ((mant + 0x1000) >> 13);
-  }
-  if (exp >= 31) return sign | 0x7c00;
-  const half = sign | (exp << 10) | (mant >> 13);
-  return half + ((mant >> 12) & 1);
 }

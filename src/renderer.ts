@@ -5,7 +5,8 @@ import weatherWgsl from './shaders/weather.wgsl?raw';
 import atmosphereWgsl from './shaders/atmosphere.wgsl?raw';
 import cloudsWgsl from './shaders/clouds.wgsl?raw';
 import displayWgsl from './shaders/display.wgsl?raw';
-import { Invalidation, QUALITY, Settings, packParams } from './settings';
+import exportWgsl from './shaders/export.wgsl?raw';
+import { Invalidation, QUALITY, Quality, Settings, packParams } from './settings';
 import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
 import type { LayerName } from './paint';
 
@@ -55,6 +56,9 @@ export class Renderer {
   private skyPipeline: GPUComputePipeline;
   private cloudPipeline: GPUComputePipeline;
   private displayPipeline: GPURenderPipeline;
+  private exportPipeline: GPUComputePipeline;
+  /** While an export runs, the interactive view stops refining clouds. */
+  private exporting = false;
 
   private cloudBindGroup!: GPUBindGroup;
   private displayBindGroup!: GPUBindGroup;
@@ -130,6 +134,7 @@ export class Renderer {
     this.msPipeline = compute(atmosphereModule, 'multiscatter');
     this.skyPipeline = compute(atmosphereModule, 'sky_cube');
     this.cloudPipeline = compute(cloudModule, 'render');
+    this.exportPipeline = compute(module(exportWgsl, 'export'), 'composite');
     this.displayPipeline = device.createRenderPipeline({
       layout: 'auto',
       vertex: { module: displayModule, entryPoint: 'vs' },
@@ -210,21 +215,7 @@ export class Renderer {
     this.accumBuffer = this.device.createBuffer({ size: 6 * face * face * 8, usage: GPUBufferUsage.STORAGE });
     this.allocatedFace = face;
 
-    this.cloudBindGroup = this.device.createBindGroup({
-      layout: this.cloudPipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.paramsBuffer } },
-        { binding: 1, resource: this.repeatSampler },
-        { binding: 2, resource: this.clampSampler },
-        { binding: 3, resource: this.shapeTex.createView() },
-        { binding: 4, resource: this.detailTex.createView() },
-        { binding: 5, resource: this.weatherTex.createView() },
-        { binding: 6, resource: this.transmittanceLut.createView() },
-        { binding: 7, resource: this.skyCube.createView({ dimension: 'cube' }) },
-        { binding: 8, resource: { buffer: this.accumBuffer } },
-        { binding: 9, resource: this.cloudCube.createView({ dimension: '2d-array' }) },
-      ],
-    });
+    this.cloudBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube);
     this.displayBindGroup = this.device.createBindGroup({
       layout: this.displayPipeline.getBindGroupLayout(0),
       entries: [
@@ -236,6 +227,110 @@ export class Renderer {
         { binding: 5, resource: this.transmittanceLut.createView() },
       ],
     });
+  }
+
+  private cloudBindGroupFor(params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture): GPUBindGroup {
+    return this.device.createBindGroup({
+      layout: this.cloudPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: params } },
+        { binding: 1, resource: this.repeatSampler },
+        { binding: 2, resource: this.clampSampler },
+        { binding: 3, resource: this.shapeTex.createView() },
+        { binding: 4, resource: this.detailTex.createView() },
+        { binding: 5, resource: this.weatherTex.createView() },
+        { binding: 6, resource: this.transmittanceLut.createView() },
+        { binding: 7, resource: this.skyCube.createView({ dimension: 'cube' }) },
+        { binding: 8, resource: { buffer: accum } },
+        { binding: 9, resource: cube.createView({ dimension: '2d-array' }) },
+      ],
+    });
+  }
+
+  /**
+   * Renders the environment at export quality into a lat-long float image (RGBA32F,
+   * row-major, top row = zenith). Uses its own cloud cube (face = width / 4), Ultra steps
+   * and full convergence; the interactive view keeps its own cube untouched.
+   */
+  async exportLatLong(width: number, samples: number, onProgress?: (done: number) => void): Promise<{ width: number; height: number; data: Float32Array }> {
+    const d = this.device;
+    const height = width / 2;
+    const face = Math.min(2048, Math.max(256, Math.round(width / 4 / 4) * 4));
+    const quality: Quality = { label: 'export', faceSize: face, viewSteps: 128, lightSteps: 6, samples };
+    this.exporting = true;
+    const params = d.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const accum = d.createBuffer({ size: 6 * face * face * 8, usage: GPUBufferUsage.STORAGE });
+    const cube = d.createTexture({
+      size: [face, face, 6], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const out = d.createTexture({ size: [width, height], format: 'rgba32float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
+    const bytesPerRow = width * 16;
+    const readback = d.createBuffer({ size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    try {
+      // Apply any pending sky or weather edits first.
+      const prep = d.createCommandEncoder();
+      d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
+      this.flushPending(prep);
+      d.queue.submit([prep.finish()]);
+
+      const bindGroup = this.cloudBindGroupFor(params, accum, cube);
+      const groups = Math.ceil(face / 4 / 8);
+      const total = 16 * samples;
+      for (let frame = 0; frame < total; frame++) {
+        d.queue.writeBuffer(params, 0, packParams(this.settings, frame, quality));
+        const encoder = d.createCommandEncoder({ label: 'export clouds' });
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.cloudPipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(groups, groups, 6);
+        pass.end();
+        d.queue.submit([encoder.finish()]);
+        // One frame in flight: keeps the browser responsive and each submission short.
+        await d.queue.onSubmittedWorkDone();
+        onProgress?.((frame + 1) / total);
+      }
+
+      const encoder = d.createCommandEncoder({ label: 'export composite' });
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(this.exportPipeline);
+      pass.setBindGroup(0, d.createBindGroup({
+        layout: this.exportPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: params } },
+          { binding: 1, resource: this.clampSampler },
+          { binding: 2, resource: this.skyCube.createView({ dimension: '2d-array' }) },
+          { binding: 3, resource: cube.createView({ dimension: '2d-array' }) },
+          { binding: 4, resource: this.transmittanceLut.createView() },
+          { binding: 5, resource: out.createView() },
+        ],
+      }));
+      pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
+      pass.end();
+      encoder.copyTextureToBuffer({ texture: out }, { buffer: readback, bytesPerRow }, [width, height]);
+      d.queue.submit([encoder.finish()]);
+      await readback.mapAsync(GPUMapMode.READ);
+      const data = new Float32Array(readback.getMappedRange().slice(0));
+      return { width, height, data };
+    } finally {
+      readback.destroy();
+      out.destroy();
+      cube.destroy();
+      accum.destroy();
+      params.destroy();
+      this.exporting = false;
+    }
+  }
+
+  private flushPending(encoder: GPUCommandEncoder): void {
+    if (this.pending.has('sky')) this.runSky(encoder);
+    if (this.pending.has('weather')) {
+      this.device.queue.writeBuffer(this.shapesBuffer, 0, packShapes(this.shapes, this.settings.baseWeather));
+      this.runWeather(encoder);
+      this.weatherVersion++;
+    }
+    const anyCloudChange = [...this.pending].some((p) => p !== 'view');
+    this.pending.clear();
+    if (anyCloudChange) this.cloudFrame = 0;
   }
 
   private runSky(encoder: GPUCommandEncoder): void {
@@ -295,16 +390,10 @@ export class Renderer {
     const encoder = d.createCommandEncoder();
     d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
     d.queue.writeBuffer(this.viewBuffer, 0, viewData);
-    if (this.pending.has('sky')) this.runSky(encoder);
-    if (this.pending.has('weather')) {
-      d.queue.writeBuffer(this.shapesBuffer, 0, packShapes(this.shapes, this.settings.baseWeather));
-      this.runWeather(encoder);
-      this.weatherVersion++;
-    }
-    this.pending.clear();
+    this.flushPending(encoder);
 
     let timed = false;
-    const dispatchClouds = !this.converged && this.inFlight < 2;
+    const dispatchClouds = !this.converged && this.inFlight < 2 && !this.exporting;
     if (dispatchClouds) {
       const ts = this.timestamps && !this.timestamps.busy ? this.timestamps : null;
       const pass = encoder.beginComputePass({

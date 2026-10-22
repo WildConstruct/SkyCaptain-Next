@@ -47,7 +47,8 @@ let nextId = 1;
 export function createShape(kind: ShapeKind, x: number, z: number, seed: number): ShapeLayer {
   const spec = SHAPE_KINDS.find((k) => k.kind === kind)!;
   return {
-    id: `shape-${nextId++}`,
+    // Unique across sessions so shapes from opened documents never collide.
+    id: `shape-${Date.now().toString(36)}-${nextId++}`,
     kind, x, z,
     size: 15, aspect: 0.7, rotation: 0, strength: 1, type: null, seed, visible: true,
     ...spec.defaults,

@@ -24,6 +24,13 @@ export interface PsgRoll {
   warnings: string[];
 }
 
+export interface SkyGraphState {
+  name: string;
+  text: string;
+  roll: PsgRoll;
+  holds: { choices: string[]; slots: number[]; sky: boolean };
+}
+
 const KINDS: ShapeKind[] = ['cumulus_field', 'storm_cell', 'front', 'clear_hole', 'haze_sheet'];
 
 /** Graph variable -> settings key. */
@@ -69,6 +76,28 @@ export class SkyGraph {
 
   private emit(): void {
     for (const fn of this.listeners) fn();
+  }
+
+  /** Graph state for documents: the graph text travels with the sky. */
+  snapshot(): SkyGraphState | null {
+    if (!this.loaded || !this.last) return null;
+    return {
+      name: this.name,
+      text: this.text,
+      roll: this.last,
+      holds: { choices: [...this.lockedChoices], slots: [...this.lockedSlots], sky: this.lockSky },
+    };
+  }
+
+  /** Restores a saved graph and its roll without re-evaluating (saved skies never drift). */
+  restore(state: SkyGraphState | null): void {
+    this.name = state?.name ?? '';
+    this.text = state?.text ?? '';
+    this.last = state?.roll ?? null;
+    this.lockedChoices = new Set(state?.holds.choices ?? []);
+    this.lockedSlots = new Set(state?.holds.slots ?? []);
+    this.lockSky = state?.holds.sky ?? false;
+    this.emit();
   }
 
   async load(name: string, text: string): Promise<void> {
