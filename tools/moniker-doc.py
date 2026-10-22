@@ -19,7 +19,7 @@ families = {
     'scene': 'visible shapes at strength ≥ 0.3: front + storm = squall; 2+ storms = storms; 1 storm; front; clear hole = clearing; haze sheet; cumulus field; else painted if any paint, else open',
 }
 for name, title, use in [('look', 'Look presets', 'Names looks (.wcx) in the Looks panel.'),
-                         ('sky', 'Whole skies', 'Names .sky.json files and HDRI exports.')]:
+                         ('sky', 'Whole skies', 'Names sky .wcx files and HDRI exports.')]:
     d = json.load(open(f'src/moniker/skycaptain-{name}.moniker'))
     out += [f"## {title}: `{d['id']}@{d['version']}`", "", use, "",
             f"Noun: **{d['noun'] or '(from the scene slot)'}**. Max tokens: {d['max_tokens']}. "

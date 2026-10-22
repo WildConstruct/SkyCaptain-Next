@@ -43,6 +43,7 @@ assert.equal(wcx.moniker.vocabulary, 'skycaptain-look@1.0');
 assert.equal(wcx.moniker.fallback, 'Brooding Golden-Hour Sky');
 assert.ok(wcx.moniker.tokens.includes('Hazy'), 'trimmed tokens are still recorded');
 assert.ok(wcx.params.some((p) => p.id === 'haze' && p.value === 15));
+assert.ok(wcx.params.every((p) => /^[0-9a-f-]{36}$/.test(p.uuid)), 'every param has a stable uuid');
 assert.ok(!wcx.params.some((p) => ['ev', 'yaw', 'seed'].includes(p.id)), 'view and composition are not part of a look');
 console.log('wcx:', wcx.name, wcx.moniker.tokens.join(' / '));
 
@@ -83,11 +84,19 @@ await page.evaluate(() => {
   st.add({ id: 's', kind: 'storm_cell', x: 0, z: 30, size: 6, aspect: 1, rotation: 0, strength: 1, type: null, seed: 2, visible: true });
 });
 const [skyDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save sky' }).click()]);
-assert.equal(skyDownload.suggestedFilename(), 'Brooding Golden-Hour Squall Line.sky.json');
-await skyDownload.saveAs('shots/looks/sky.sky.json');
-const doc = JSON.parse(readFileSync('shots/looks/sky.sky.json', 'utf8'));
-assert.equal(doc.name, skyDownload.suggestedFilename().replace('.sky.json', ''));
+assert.equal(skyDownload.suggestedFilename(), 'Brooding Golden-Hour Squall Line.wcx');
+await skyDownload.saveAs('shots/looks/sky.wcx');
+const doc = JSON.parse(readFileSync('shots/looks/sky.wcx', 'utf8'));
+assert.equal(doc.kind, 'sky');
+assert.equal(doc.name, 'Brooding Golden-Hour Squall Line');
 assert.equal(doc.moniker.vocabulary, 'skycaptain-sky@1.0');
+
+// A sky .wcx imports as a look: only its look settings, never its composition.
+await page.evaluate(() => { window.skyGraph['settings'].sunElevation = 50; });
+await page.locator('input[type=file][accept=".wcx"]').setInputFiles('shots/looks/sky.wcx');
+await page.waitForTimeout(200);
+assert.equal(await setting('sunElevation'), doc.params.find((p) => p.id === 'sunElevation').value, 'sky look applied');
+assert.equal(await page.evaluate(() => window.skyShapes.shapes.length), 2, 'shapes untouched by a look import');
 console.log('sky file:', skyDownload.suggestedFilename());
 
 await browser.close();

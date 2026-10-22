@@ -113,14 +113,20 @@ scene-linear lat-long image, with north at the centre and east to the right:
 `tools/smoke-export.mjs` drives the button and checks every pixel. `tools/check-hdri.py`
 re-reads the files with the OpenEXR and OpenCV readers.
 
-**Save sky / Open sky** store the whole sky in one `.sky.json`:
-- settings and shape layers
+Everything skyCaptain saves is a `.wcx` file in the WC Preset System Standard, the same
+format Lumen uses (`src/wcx.ts`). Each file has a format header, a Moniker block, and
+`params` matched by a stable uuid and then by id. `kind` says what the file holds:
+`look` or `sky`.
+
+**Save sky** writes the whole sky as one sky `.wcx`:
+- every setting (except the quality tier, which belongs to your machine) and the shape layers
 - paint, as sparse tiles (int16 paint, float32 smudge warp)
 - the sky graph, with its text, seed, holds and resolved values
 
 Opening restores the saved roll without re-evaluating, so a later edit to the graph
-can't change a saved sky. `tools/smoke-document.mjs` round-trips a sky and compares the
-GPU weather map.
+can't change a saved sky. **Open…** takes a sky `.wcx`, or an older `.sky.json`. A look
+`.wcx` opened there just applies the look. `tools/smoke-document.mjs` round-trips a sky,
+plus a legacy file, and compares the GPU weather map.
 
 ## Looks and Moniker names
 
@@ -136,7 +142,8 @@ deterministic naming engine (vendored unchanged in `vendor/moniker/`). The artis
 edit the name, or press ↻ for a fresh suggestion. A saved look stays in the browser and
 downloads as a `.wcx` file in Lumen's format (`_plugin: "skycaptain"`, `kind: "look"`).
 **Import .wcx…** loads one back. Sky files and HDRI exports are also named by Moniker
-from the scene, such as `Brooding Golden-Hour Squall Line.sky.json`.
+from the scene, such as `Brooding Golden-Hour Squall Line.wcx`. Importing a sky `.wcx`
+as a look keeps only its look settings.
 
 There are two vocabularies:
 
@@ -158,7 +165,7 @@ time of day, mood and scene. `docs/moniker.md` lists every slot and word, and
    an example graph, reroll and holds.
 6. **Look polish.** Cumulonimbus anvils, ground shadows from clouds, horizon and
    ground model, edge albedo instead of powder.
-7. **Export and documents.** Done: EXR/HDR export and `.sky.json` save/open.
+7. **Export and documents.** Done: EXR/HDR export and sky `.wcx` save/open.
 8. **Looks.** Done: six factory looks, saved `.wcx` looks named by Moniker, and Moniker names for skies.
 9. **Ground and skylight.** The ground is lit only by the sun today, so low-sun skies have a
    near-black ground. Add sky irradiance and cloud shadows on the ground.

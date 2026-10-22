@@ -1,8 +1,9 @@
-// Sky document round trip: build a sky (graph roll, hand shape, paint, smudge), Save sky,
-// wreck it, Open sky, and compare settings, shapes, caption and the GPU weather map.
+// Sky document round trip: build a sky (graph roll, hand shape, paint, smudge), Save sky
+// (.wcx), wreck it, Open it, and compare settings, shapes, caption and the GPU weather map.
+// Then the same through an older .sky.json, which must still open.
 import { chromium } from 'playwright-core';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 mkdirSync('shots/doc', { recursive: true });
 const browser = await chromium.launch({
@@ -45,6 +46,14 @@ const [download] = await Promise.all([page.waitForEvent('download'), page.getByR
 const path = `shots/doc/${download.suggestedFilename()}`;
 await download.saveAs(path);
 const size = readFileSync(path).length;
+assert.ok(download.suggestedFilename().endsWith('.wcx'), 'skies save as .wcx');
+const file = JSON.parse(readFileSync(path, 'utf8'));
+assert.equal(file._format, 'wcx');
+assert.equal(file._plugin, 'skycaptain');
+assert.equal(file._wcxVersion, 1);
+assert.equal(file.kind, 'sky');
+assert.ok(file.params.every((p) => typeof p.uuid === 'string' && typeof p.id === 'string'), 'params carry uuid and id');
+assert.ok(!file.params.some((p) => p.id === 'quality'), 'quality is not part of a sky');
 console.log(`saved ${download.suggestedFilename()} (${(size / 1024).toFixed(0)} KB)`);
 
 // Wreck the sky.
@@ -56,8 +65,11 @@ await page.evaluate(async () => {
 const wrecked = await snapshot();
 assert.notDeepEqual(wrecked.weather, before.weather, 'sky actually changed before reopening');
 
-await page.locator('input[type=file][accept=".json,application/json"]').setInputFiles(path);
-await page.waitForTimeout(300);
+const openFile = async (filePath) => {
+  await page.locator('input[type=file][accept=".wcx,.json"]').setInputFiles(filePath);
+  await page.waitForTimeout(300);
+};
+await openFile(path);
 const after = await snapshot();
 assert.deepEqual(after.settings, before.settings, 'settings restored');
 assert.deepEqual(after.shapes, before.shapes, 'shapes restored');
@@ -71,5 +83,20 @@ for (let i = 0; i < before.weather.length; i++) {
 // Paint is stored as int16, so allow a 1/255 rounding step in the 8-bit weather map.
 assert.ok(maxDiff <= 1, `weather map restored (max diff ${maxDiff}/255, ${changed} values)`);
 console.log(`reopened: settings, shapes, caption identical; weather map max diff ${maxDiff}/255 in ${changed} of ${before.weather.length} values`);
+
+// An older .sky.json (format skycaptain.sky v1) still opens to the same sky.
+const legacy = {
+  format: 'skycaptain.sky', version: 1, savedAt: new Date().toISOString(), name: file.name, moniker: file.moniker,
+  settings: { ...Object.fromEntries(file.params.map((p) => [p.id, p.value])), quality: 'ultra' },
+  ...file.sky,
+};
+writeFileSync('shots/doc/legacy.sky.json', JSON.stringify(legacy));
+await page.evaluate(async () => { window.skyShapes.replaceAll([]); await window.skyGraph.roll(99); });
+await openFile('shots/doc/legacy.sky.json');
+const legacyAfter = await snapshot();
+assert.deepEqual(legacyAfter.settings, before.settings, 'legacy settings restored; quality left alone');
+assert.deepEqual(legacyAfter.shapes, before.shapes, 'legacy shapes restored');
+assert.equal(legacyAfter.caption, before.caption, 'legacy caption restored');
+console.log('legacy .sky.json opens');
 await browser.close();
 console.log('smoke-document: all passed');

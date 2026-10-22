@@ -9,6 +9,7 @@ import { PsgPanel } from './ui/psg-panel';
 import { ExportPanel, download } from './ui/export-panel';
 import { paintTilesOf, parseSky, saveSky } from './document';
 import { LooksPanel } from './ui/looks-panel';
+import * as presets from './presets';
 import skyVocabulary from './moniker/skycaptain-sky.moniker?raw';
 import { describeSky, monikerBlock } from './moniker/skycaptain';
 import { viewUniforms } from './camera';
@@ -180,10 +181,11 @@ async function main(): Promise<void> {
   const saveButton = document.createElement('button');
   saveButton.textContent = 'Save sky';
   const openButton = document.createElement('button');
-  openButton.textContent = 'Open sky…';
+  openButton.textContent = 'Open…';
+  openButton.title = 'Open a sky .wcx (or an older .sky.json). A look .wcx applies just the look.';
   const openInput = document.createElement('input');
   openInput.type = 'file';
-  openInput.accept = '.json,application/json';
+  openInput.accept = '.wcx,.json';
   openInput.hidden = true;
   docRow.append(saveButton, openButton, openInput);
   panel.append(docRow);
@@ -192,7 +194,7 @@ async function main(): Promise<void> {
   saveButton.onclick = () => {
     const description = describeSky(settings, store.shapes, layers.hasContent, skyVocab);
     const json = saveSky(settings, store.shapes, layers, skyGraph, { name: description.suggestion, moniker: monikerBlock(skyId, description) });
-    download(`${description.suggestion}.sky.json`, json, 'application/json');
+    download(`${description.suggestion}.wcx`, json, 'application/json');
   };
   openButton.onclick = () => openInput.click();
   openInput.onchange = async () => {
@@ -200,7 +202,16 @@ async function main(): Promise<void> {
     openInput.value = '';
     if (!file) return;
     try {
-      openSky(await file.text());
+      const text = await file.text();
+      const look = lookOnly(text, file.name);
+      if (look) {
+        presets.remember(look);
+        presets.apply(look, set);
+        looksPanel.refresh();
+        status.textContent = `Applied the look ${look.name}.`;
+      } else {
+        openSky(text);
+      }
     } catch (err) {
       status.textContent = `Could not open ${file.name}: ${err instanceof Error ? err.message : err}`;
     }
@@ -213,7 +224,7 @@ async function main(): Promise<void> {
   const looksRoot = document.createElement('div');
   looksSection.append(looksSummary, looksRoot);
   panel.append(looksSection);
-  new LooksPanel(looksRoot, settings, set);
+  const looksPanel = new LooksPanel(looksRoot, settings, set);
 
   const mapCanvas = document.createElement('canvas');
   mapCanvas.className = 'minimap';
@@ -221,14 +232,23 @@ async function main(): Promise<void> {
   panel.append(mapCanvas);
   const minimap = new Minimap(mapCanvas, settings, store, tools, stroke);
 
+  /** A look .wcx opened from Open…: returns it so it applies as a look, else null. */
+  function lookOnly(text: string, fileName: string): presets.LookPreset | null {
+    let kind: unknown;
+    try { kind = (JSON.parse(text) as { kind?: unknown }).kind; } catch { return null; }
+    if (kind !== 'look') return null;
+    const { preset, error } = presets.parse(text, fileName.replace(/\.wcx$/i, ''));
+    if (!preset) throw new Error(error ?? 'unreadable look');
+    return preset;
+  }
+
   function openSky(text: string): void {
     const doc = parseSky(text);
     if (doc.moniker?.id) skyId = doc.moniker.id;
     const tiles = paintTilesOf(doc, layers.size);
     for (const key of Object.keys(DEFAULTS) as (keyof Settings)[]) {
-      const v = doc.settings[key] ?? DEFAULTS[key];
-      if (key === 'quality') { settings.quality = v as QualityName; quality.value = settings.quality; }
-      else set(key, v as number);
+      if (key === 'quality') continue; // The viewer's machine, not part of the sky.
+      set(key, (doc.settings[key] ?? DEFAULTS[key]) as number);
     }
     renderer.update(settings, 'sky');
     renderer.update(settings, 'weather');

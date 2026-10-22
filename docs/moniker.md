@@ -35,7 +35,7 @@ Composite nouns (replace the noun when every condition fires):
 
 ## Whole skies: `skycaptain-sky@1.0`
 
-Names .sky.json files and HDRI exports.
+Names sky .wcx files and HDRI exports.
 
 Noun: **(from the scene slot)**. Max tokens: 3. Order: mood → cover → clarity → time → scene.
 
