@@ -122,6 +122,14 @@ Opening restores the saved roll without re-evaluating, so a later edit to the gr
 can't change a saved sky. `tools/smoke-document.mjs` round-trips a sky and compares the
 GPU weather map.
 
+## Vibes
+
+![Vibes](docs/look/vibes-001.png)
+
+One click sets the sun, atmosphere, light and cloud character. The vibes are Bright
+midday, Golden hour, Last light, Hazy summer, Brooding and Overcast softbox. They never
+touch shapes or paint, so you can try a vibe over any composed sky (`src/vibes.ts`).
+
 ## Roadmap
 
 1. **Look spike.** Done.
@@ -134,4 +142,6 @@ GPU weather map.
 6. **Look polish.** Cumulonimbus anvils, ground shadows from clouds, horizon and
    ground model, edge albedo instead of powder.
 7. **Export and documents.** Done: EXR/HDR export and `.sky.json` save/open.
-8. **Vibes.** Look presets (sun + atmosphere + clouds) and a WCX wrapper for the suite.
+8. **Vibes.** Done: six look presets. Still to do: a WCX wrapper for the suite.
+9. **Ground and skylight.** The ground is lit only by the sun today, so low-sun skies have a
+   near-black ground. Add sky irradiance and cloud shadows on the ground.

@@ -8,6 +8,7 @@ import { SkyGraph } from './psg';
 import { PsgPanel } from './ui/psg-panel';
 import { ExportPanel, download } from './ui/export-panel';
 import { paintTilesOf, parseSky, saveSky } from './document';
+import { VIBES } from './vibes';
 import { viewUniforms } from './camera';
 import { ShapeKind, ShapeLayer, ShapeStore, createShape } from './shapes';
 import { SkyOverlay } from './ui/sky-overlay';
@@ -195,6 +196,19 @@ async function main(): Promise<void> {
       status.textContent = `Could not open ${file.name}: ${err instanceof Error ? err.message : err}`;
     }
   };
+
+  const vibeRow = document.createElement('div');
+  vibeRow.className = 'chips vibes';
+  for (const vibe of VIBES) {
+    const b = document.createElement('button');
+    b.textContent = vibe.name;
+    b.title = `${vibe.hint}. Keeps your shapes and paint.`;
+    b.onclick = () => {
+      for (const [key, value] of Object.entries(vibe.settings)) set(key as keyof Settings, value as number);
+    };
+    vibeRow.append(b);
+  }
+  panel.append(vibeRow);
 
   const mapCanvas = document.createElement('canvas');
   mapCanvas.className = 'minimap';
