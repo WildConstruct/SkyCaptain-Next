@@ -1,12 +1,19 @@
-// Animate: the animation recipe (wind, cloud life, time-lapse, optional sun move), a time
-// scrubber with live playback, and image-sequence export. Playback is a preview: the view
+// Animate: the animation recipe (wind, cloud life, time-lapse, ease), keys, a time scrubber
+// with live playback, and image-sequence export. At frame 0 every edit changes the composed
+// sky. Scrubbed later, slider and shape edits become keys at that time (auto-key), and the
+// sliders and shapes show their values at that time. Playback is a preview: the view
 // refines progressively, so motion shimmers; the exported sequence renders every frame
 // converged.
 
-import { DEFAULT_ANIMATION, frameCount, movesSun, settingsAt, type Animation } from '../animation';
+import {
+  DEFAULT_ANIMATION, KEYABLE_SETTINGS, SHAPE_KEYS, frameCount, removeKey, setKey, settingsAt, shapesAt,
+  timeInvalidation, type Animation, type KeyableSetting, type ShapeKey,
+} from '../animation';
+import type { History } from '../history';
 import type { Renderer } from '../renderer';
 import { folderSink, renderSequence, type FrameSink } from '../sequence';
 import type { Settings } from '../settings';
+import type { ShapeLayer, ShapeStore } from '../shapes';
 import { download } from './export-panel';
 
 const SIZES = [
@@ -25,10 +32,23 @@ const FIELDS: { key: NumberKey; label: string; step: number; min: number; max: n
   { key: 'duration', label: 'Length (s)', step: 0.5, min: 0.5, max: 600, hint: 'Clip length in seconds' },
   { key: 'fps', label: 'Frame rate', step: 1, min: 1, max: 60, hint: 'Frames per second' },
   { key: 'timeLapse', label: 'Time-lapse ×', step: 10, min: 1, max: 10000, hint: 'Scene time per clip second: 120 means a 10 s clip covers 20 minutes of weather' },
-  { key: 'windSpeed', label: 'Wind (km/h)', step: 1, min: 0, max: 300, hint: 'How fast the weather drifts' },
-  { key: 'windHeading', label: 'Wind toward (°)', step: 5, min: -360, max: 360, hint: 'Compass heading the clouds move toward: 0 north, 90 east' },
+  { key: 'windSpeed', label: 'Wind (km/h)', step: 1, min: 0, max: 300, hint: 'How fast the weather drifts. Changed after the start, it is keyed.' },
+  { key: 'windHeading', label: 'Wind toward (°)', step: 5, min: -360, max: 360, hint: 'Compass heading the clouds move toward: 0 north, 90 east. Changed after the start, it is keyed.' },
   { key: 'cloudLife', label: 'Cloud life (min)', step: 1, min: 0, max: 600, hint: 'Minutes for clouds to fully change shape; 0 keeps their shapes and only drifts them' },
 ];
+
+const SETTING_LABELS: Record<string, string> = {
+  sunElevation: 'sun elevation', sunAzimuth: 'sun azimuth', sunIntensity: 'sun intensity', haze: 'clarity',
+  groundAlbedo: 'ground albedo', coverage: 'coverage', typeBias: 'type', density: 'density', erosion: 'erosion',
+  baseWeather: 'background', ambient: 'ambient', forwardG: 'silver lining', powder: 'powder', backG: 'back-scatter g',
+  backWeight: 'back-scatter weight', cloudBottom: 'cloud base', cloudThickness: 'cumulus height',
+  towerHeight: 'tower height', windSpeed: 'wind speed', windHeading: 'wind heading',
+};
+
+/** Whether a setting can be keyed. */
+export function isKeyable(name: keyof Settings): name is KeyableSetting {
+  return (KEYABLE_SETTINGS as readonly string[]).includes(name);
+}
 
 export class AnimatePanel {
   private animation: Animation = { ...DEFAULT_ANIMATION };
@@ -40,16 +60,22 @@ export class AnimatePanel {
   private readonly timeLabel: HTMLElement;
   private readonly summary: HTMLElement;
   private readonly inputs = new Map<NumberKey, HTMLInputElement>();
-  private readonly sunCheck: HTMLInputElement;
-  private readonly sunElevation: HTMLInputElement;
-  private readonly sunAzimuth: HTMLInputElement;
+  private readonly ease: HTMLSelectElement;
+  private readonly keyList: HTMLElement;
+  private lastKeyEdit = { name: '', at: 0 };
 
   constructor(
     root: HTMLElement,
     private renderer: Renderer,
     private settings: Settings,
     private filename: () => string,
+    private store: ShapeStore,
+    private history: History,
+    /** Shows settings in the sliders without changing anything (the values at the current time). */
+    private showSettings: (s: Settings) => void,
   ) {
+    store.keyEdit = (id, changes) => this.keyShape(id, changes);
+    store.onBaseChange = () => this.seek(this.time);
     const fields = document.createElement('div');
     fields.className = 'fields';
     for (const f of FIELDS) {
@@ -58,40 +84,39 @@ export class AnimatePanel {
       label.title = f.hint;
       const input = numberInput(f.min, f.max, f.step);
       input.title = f.hint;
-      input.onchange = () => this.edit(() => { this.animation[f.key] = clampNumber(input, f.min, f.max, this.animation[f.key]); });
+      input.onchange = () => {
+        const v = clampNumber(input, f.min, f.max, this.animation[f.key]);
+        // Scrubbed away from frame 0, wind changes are keyed like any other setting.
+        if (this.time > 0 && (f.key === 'windSpeed' || f.key === 'windHeading')) {
+          this.recordUndo(`wind:${f.key}`);
+          this.animation = setKey(this.animation, this.time, { sky: { [f.key]: v } });
+          this.sync();
+          this.seek(this.time);
+        } else {
+          this.edit(() => { this.animation[f.key] = v; });
+        }
+      };
       this.inputs.set(f.key, input);
       fields.append(label, input);
     }
     root.append(fields);
 
-    // Optional sun move.
-    const sunRow = document.createElement('label');
-    sunRow.className = 'check';
-    this.sunCheck = document.createElement('input');
-    this.sunCheck.type = 'checkbox';
-    sunRow.append(this.sunCheck, 'Move the sun by the end');
-    this.sunElevation = numberInput(-10, 90, 0.5);
-    this.sunAzimuth = numberInput(-180, 180, 1);
-    const sunFields = document.createElement('div');
-    sunFields.className = 'fields';
-    const lab = (t: string) => { const l = document.createElement('label'); l.textContent = t; return l; };
-    sunFields.append(lab('End elevation (°)'), this.sunElevation, lab('End azimuth (°)'), this.sunAzimuth);
-    const applySun = () => this.edit(() => {
-      this.animation.sunEnd = this.sunCheck.checked
-        ? { elevation: clampNumber(this.sunElevation, -10, 90, this.settings.sunElevation), azimuth: clampNumber(this.sunAzimuth, -180, 180, this.settings.sunAzimuth) }
-        : null;
-    });
-    this.sunCheck.onchange = () => {
-      if (this.sunCheck.checked && !this.animation.sunEnd) {
-        // Start from the current sun, a few degrees lower: a sensible first sunset.
-        this.sunElevation.value = String(Math.max(-2, this.settings.sunElevation - 15));
-        this.sunAzimuth.value = String(this.settings.sunAzimuth);
-      }
-      applySun();
-    };
-    this.sunElevation.onchange = applySun;
-    this.sunAzimuth.onchange = applySun;
-    root.append(sunRow, sunFields);
+    // Keys: made by editing while scrubbed away from frame 0.
+    const easeRow = document.createElement('div');
+    easeRow.className = 'fields';
+    const easeLabel = document.createElement('label');
+    easeLabel.textContent = 'Between keys';
+    this.ease = document.createElement('select');
+    this.ease.add(new Option('Smooth', 'smooth'));
+    this.ease.add(new Option('Linear', 'linear'));
+    this.ease.onchange = () => this.edit(() => { this.animation.ease = this.ease.value as Animation['ease']; });
+    easeRow.append(easeLabel, this.ease);
+    this.keyList = document.createElement('div');
+    this.keyList.className = 'keys';
+    const keyHint = document.createElement('p');
+    keyHint.className = 'hint';
+    keyHint.textContent = 'To animate anything, scrub away from the start, then change sliders or move, resize or fade shapes: each change is keyed at that time. The start is always the sky as composed.';
+    root.append(easeRow, this.keyList, keyHint);
 
     // Scrubber and playback.
     const timeRow = document.createElement('div');
@@ -133,7 +158,7 @@ export class AnimatePanel {
     root.append(timeRow, controls);
 
     this.summary = document.createElement('p');
-    this.summary.className = 'hint';
+    this.summary.className = 'hint clip-summary';
     root.append(this.summary);
 
     // Sequence export.
@@ -179,7 +204,7 @@ export class AnimatePanel {
       const started = performance.now();
       try {
         const written = await renderSequence(
-          this.renderer, this.animation,
+          this.renderer, this.animation, this.store.baseShapes,
           { width: SIZES[Number(size.value)].width, samples: QUALITIES[Number(quality.value)].samples, format: format.value as 'exr' | 'hdr', name: this.filename() },
           sink,
           (frame, total, within) => {
@@ -215,27 +240,79 @@ export class AnimatePanel {
   }
 
   get value(): Animation {
-    return { ...this.animation, sunEnd: this.animation.sunEnd ? { ...this.animation.sunEnd } : null };
+    return structuredClone(this.animation);
   }
 
   /** Replaces the recipe (opening a sky) and returns to the start. */
   set value(a: Animation) {
-    this.animation = { ...a, sunEnd: a.sunEnd ? { ...a.sunEnd } : null };
+    this.animation = structuredClone(a);
     this.playing = false;
-    this.time = 0;
     this.sync();
+    this.seek(0);
     this.renderer.setTime(null, 'sky');
   }
 
-  /** Shows the sky at clip time t. t = 0 is exactly the sky as composed. */
+  /** Clip time on show, seconds. Above 0, edits become keys. */
+  get currentTime(): number {
+    return this.time;
+  }
+
+  /** Shows the sky at clip time t: renderer, shape layers and sliders. t = 0 is the sky as composed. */
   seek(t: number): void {
     this.time = Math.min(Math.max(0, t), this.animation.duration);
     this.scrub.value = String(this.time);
     const a = this.animation;
     const time = this.time;
-    const invalidation = movesSun(a) ? 'sky' : 'clouds';
-    this.renderer.setTime(time > 0 ? (s) => settingsAt(s, a, time) : null, invalidation);
+    this.renderer.setTime(time > 0 ? (s) => settingsAt(s, a, time) : null, timeInvalidation(a));
+    if (time > 0) this.store.showAnimated(shapesAt(this.store.baseShapes, a, time));
+    else this.store.showBase();
+    this.showSettings(time > 0 ? settingsAt(this.settings, a, time) : this.settings);
     this.label();
+  }
+
+  /** Keys a setting at the current time (the caller only does this when time > 0). */
+  keySetting(name: KeyableSetting, value: number): void {
+    this.recordUndo(`setting:${name}`);
+    this.animation = setKey(this.animation, this.time, { sky: { [name]: value } });
+    this.sync();
+    this.seek(this.time);
+  }
+
+  /** Shape edits in the animated view: keyable properties become keys at the current time. */
+  private keyShape(id: string, changes: Partial<ShapeLayer>): Partial<ShapeLayer> {
+    const values: Partial<Record<ShapeKey, number>> = {};
+    for (const key of SHAPE_KEYS) {
+      const v = changes[key];
+      if (typeof v === 'number') values[key] = v;
+    }
+    if (Object.keys(values).length) {
+      this.recordUndo(`shape:${id}`);
+      this.animation = setKey(this.animation, this.time, { shape: { id, values } });
+      this.sync();
+      // The store applies the change to its view itself; renderer and sliders follow on seek.
+      queueMicrotask(() => this.renderer.setShapes(this.store.shapes));
+    }
+    return values;
+  }
+
+  /** One undo step per gesture: edits to the same thing within half a second merge. */
+  private recordUndo(name: string): void {
+    const now = performance.now();
+    if (this.lastKeyEdit.name === name && now - this.lastKeyEdit.at < 500) {
+      this.lastKeyEdit.at = now;
+      return;
+    }
+    this.lastKeyEdit = { name, at: now };
+    const snapshot = (a: Animation) => ({
+      apply: () => {
+        const current = this.animation;
+        this.animation = a;
+        this.sync();
+        this.seek(this.time);
+        return snapshot(current);
+      },
+    });
+    this.history.push(snapshot(structuredClone(this.animation)));
   }
 
   private edit(change: () => void): void {
@@ -246,18 +323,48 @@ export class AnimatePanel {
 
   private sync(): void {
     for (const [key, input] of this.inputs) input.value = String(this.animation[key]);
-    this.sunCheck.checked = this.animation.sunEnd !== null;
-    this.sunElevation.disabled = this.sunAzimuth.disabled = !this.sunCheck.checked;
-    if (this.animation.sunEnd) {
-      this.sunElevation.value = String(this.animation.sunEnd.elevation);
-      this.sunAzimuth.value = String(this.animation.sunEnd.azimuth);
-    }
+    this.ease.value = this.animation.ease;
+    this.renderKeys();
     this.scrub.max = String(this.animation.duration);
     const a = this.animation;
     const sceneMin = (a.duration * a.timeLapse) / 60;
     const driftKm = (a.windSpeed * sceneMin) / 60;
     this.summary.textContent = `${frameCount(a)} frames · ${formatMinutes(sceneMin)} of weather · clouds drift ${driftKm.toFixed(1)} km${a.cloudLife > 0 ? ` and turn over ${(sceneMin / a.cloudLife).toFixed(1)}×` : ''}.`;
     this.label();
+  }
+
+  private renderKeys(): void {
+    this.keyList.replaceChildren();
+    if (!this.animation.keys.length) return;
+    const names = (k: Animation['keys'][number]) => {
+      const parts = Object.keys(k.sky).map((n) => SETTING_LABELS[n] ?? n);
+      const shapes = Object.keys(k.shapes).length;
+      if (shapes) parts.push(`${shapes} shape${shapes === 1 ? '' : 's'}`);
+      return parts.join(', ');
+    };
+    this.animation.keys.forEach((k, i) => {
+      const row = document.createElement('div');
+      row.className = 'key';
+      const go = document.createElement('button');
+      go.className = 'key-time';
+      go.textContent = `${k.time.toFixed(2)} s`;
+      go.title = 'Go to this key';
+      go.onclick = () => { this.playing = false; this.seek(k.time); };
+      const what = document.createElement('span');
+      what.textContent = names(k);
+      const del = document.createElement('button');
+      del.className = 'icon';
+      del.textContent = '×';
+      del.title = 'Remove this key';
+      del.onclick = () => {
+        this.recordUndo(`remove:${i}:${performance.now()}`);
+        this.animation = removeKey(this.animation, i);
+        this.sync();
+        this.seek(this.time);
+      };
+      row.append(go, what, del);
+      this.keyList.append(row);
+    });
   }
 
   private label(): void {

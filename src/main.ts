@@ -7,7 +7,7 @@ import { BrushPanel } from './ui/brush-panel';
 import { SkyGraph } from './psg';
 import { PsgPanel } from './ui/psg-panel';
 import { ExportPanel, download } from './ui/export-panel';
-import { AnimatePanel } from './ui/animate-panel';
+import { AnimatePanel, isKeyable } from './ui/animate-panel';
 import { renderSequence, type SequenceOptions } from './sequence';
 import { paintTilesOf, parseSky, saveSky } from './document';
 import { LooksPanel } from './ui/looks-panel';
@@ -198,8 +198,8 @@ async function main(): Promise<void> {
   // A sky keeps one identity across saves in a session; opening a file adopts its id.
   let skyId: string = crypto.randomUUID();
   saveButton.onclick = () => {
-    const description = describeSky(settings, store.shapes, layers.hasContent, skyVocab);
-    const json = saveSky(settings, store.shapes, layers, skyGraph, { name: description.suggestion, moniker: monikerBlock(skyId, description) }, animatePanel.value);
+    const description = describeSky(settings, store.baseShapes, layers.hasContent, skyVocab);
+    const json = saveSky(settings, store.baseShapes, layers, skyGraph, { name: description.suggestion, moniker: monikerBlock(skyId, description) }, animatePanel.value);
     download(`${description.suggestion}.wcx`, json, 'application/json');
   };
   openButton.onclick = () => openInput.click();
@@ -274,7 +274,7 @@ async function main(): Promise<void> {
   exportSection.append(exportSummary, exportRoot);
   panel.append(exportSection);
   // Files are named by Moniker from what the sky is: "Hazy Golden-Hour Squall Line".
-  const skyName = () => describeSky(settings, store.shapes, layers.hasContent, skyVocab).suggestion;
+  const skyName = () => describeSky(settings, store.baseShapes, layers.hasContent, skyVocab).suggestion;
   const fileStem = () => skyName();
   new ExportPanel(exportRoot, renderer, fileStem);
 
@@ -284,13 +284,21 @@ async function main(): Promise<void> {
   const animateRoot = document.createElement('div');
   animateSection.append(animateSummary, animateRoot);
   panel.append(animateSection);
-  const animatePanel = new AnimatePanel(animateRoot, renderer, settings, fileStem);
+  // Sliders show values at the animation time on show without changing anything.
+  const showSettings = (s: Settings) => {
+    for (const [key, ui] of inputs) {
+      const v = s[key] as number;
+      ui.input.value = String(v);
+      ui.value.textContent = `${+v.toFixed(3)}${ui.unit}`;
+    }
+  };
+  const animatePanel = new AnimatePanel(animateRoot, renderer, settings, fileStem, store, history, showSettings);
   // tools/smoke-animate.mjs renders sequences through this with an in-memory sink.
   Object.assign(window, {
     skyAnimate: animatePanel,
     skySequence: (options: SequenceOptions, range?: [number, number]) => {
       const frames: { name: string; bytes: Uint8Array }[] = [];
-      return renderSequence(renderer, animatePanel.value, options, async (name, bytes) => { frames.push({ name, bytes }); }, undefined, undefined, range)
+      return renderSequence(renderer, animatePanel.value, store.baseShapes, options, async (name, bytes) => { frames.push({ name, bytes }); }, undefined, undefined, range)
         .then(() => frames);
     },
   });
@@ -344,8 +352,13 @@ async function main(): Promise<void> {
       input.max = String(spec.max);
       input.step = String(spec.step);
       input.value = String(settings[spec.key]);
-      input.oninput = () => set(spec.key, Number(input.value));
-      input.ondblclick = () => set(spec.key, DEFAULTS[spec.key] as number);
+      // Scrubbed away from frame 0, a slider edit becomes a key at that time.
+      const edit = (v: number) => {
+        if (animatePanel.currentTime > 0 && isKeyable(spec.key)) animatePanel.keySetting(spec.key, v);
+        else set(spec.key, v);
+      };
+      input.oninput = () => edit(Number(input.value));
+      input.ondblclick = () => edit(DEFAULTS[spec.key] as number);
       row.append(name, value, input);
       details.append(row);
       inputs.set(spec.key, { input, value, unit: spec.unit ?? '' });

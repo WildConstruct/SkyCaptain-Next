@@ -133,9 +133,19 @@ type Listener = () => void;
 
 /** Shape layers plus selection; edits checkpoint into the shared history. */
 export class ShapeStore {
+  /** What everything shows and renders: the composed layers, or their animated view. */
   shapes: ShapeLayer[] = [];
   selected: string | null = null;
   private listeners = new Set<Listener>();
+  /** The composed layers while an animated view is shown (see showAnimated). */
+  private base: ShapeLayer[] | null = null;
+  /**
+   * While an animated view is shown, edits to keyable properties go here (to become
+   * keys) instead of changing the composed layers. Returns the changes it took.
+   */
+  keyEdit: ((id: string, changes: Partial<ShapeLayer>) => Partial<ShapeLayer>) | null = null;
+  /** Called when the composed layers change while an animated view is shown. */
+  onBaseChange: (() => void) | null = null;
 
   constructor(private history: History) {}
 
@@ -148,19 +158,47 @@ export class ShapeStore {
     for (const fn of this.listeners) fn();
   }
 
+  /** The composed layers (frame 0), whatever is on show. Save and name skies from these. */
+  get baseShapes(): ShapeLayer[] {
+    return this.base ?? this.shapes;
+  }
+
+  get animated(): boolean {
+    return this.base !== null;
+  }
+
+  /** Shows layers as they are at an animation time; edits are routed to keyEdit. */
+  showAnimated(shapes: ShapeLayer[]): void {
+    this.base ??= this.shapes;
+    this.shapes = shapes;
+    this.emit();
+  }
+
+  /** Back to the composed layers. */
+  showBase(): void {
+    if (!this.base) return;
+    this.shapes = this.base;
+    this.base = null;
+    this.emit();
+  }
+
+  private baseChanged(): void {
+    if (this.base) this.onBaseChange?.();
+  }
+
   get current(): ShapeLayer | undefined {
     return this.shapes.find((s) => s.id === this.selected);
   }
 
   /** Call once before a user edit (a drag, a slider gesture, a button). */
   checkpoint(): void {
-    this.history.push(this.snapshot(JSON.stringify(this.shapes)));
+    this.history.push(this.snapshot(JSON.stringify(this.baseShapes)));
   }
 
   private snapshot(json: string): HistoryEntry {
     return {
       apply: () => {
-        const now = JSON.stringify(this.shapes);
+        const now = JSON.stringify(this.baseShapes);
         this.restore(json);
         return this.snapshot(now);
       },
@@ -168,37 +206,61 @@ export class ShapeStore {
   }
 
   private restore(json: string): void {
-    this.shapes = JSON.parse(json);
+    if (this.base) {
+      this.base = JSON.parse(json);
+      this.shapes = JSON.parse(json);
+    } else {
+      this.shapes = JSON.parse(json);
+    }
     if (!this.current) this.selected = null;
     this.emit();
+    this.baseChanged();
   }
 
+  // Adding and removing layers, and replacing them all, always act on the composed layers
+  // (a layer exists for the whole clip); an animated view on show is rebuilt from them.
+
   add(shape: ShapeLayer): void {
-    if (this.shapes.length >= MAX_SHAPES) return;
+    if (this.baseShapes.length >= MAX_SHAPES) return;
     this.checkpoint();
+    if (this.base) this.base.push({ ...shape });
     this.shapes.push(shape);
     this.selected = shape.id;
     this.emit();
+    this.baseChanged();
   }
 
   remove(id: string): void {
     this.checkpoint();
+    if (this.base) this.base = this.base.filter((s) => s.id !== id);
     this.shapes = this.shapes.filter((s) => s.id !== id);
     if (this.selected === id) this.selected = null;
     this.emit();
+    this.baseChanged();
   }
 
   /** Replaces every layer (callers checkpoint first). Keeps the selection if it survives. */
   replaceAll(shapes: ShapeLayer[]): void {
+    if (this.base) this.base = shapes.map((s) => ({ ...s }));
     this.shapes = shapes;
     if (!this.current) this.selected = null;
     this.emit();
+    this.baseChanged();
   }
 
-  /** Mutates without a checkpoint; callers checkpoint at gesture start. */
+  /**
+   * Mutates without a checkpoint; callers checkpoint at gesture start. In an animated view,
+   * keyable properties become keys (keyEdit) and the rest change the composed layer too.
+   */
   patch(id: string, changes: Partial<ShapeLayer>): void {
     const shape = this.shapes.find((s) => s.id === id);
     if (!shape) return;
+    if (this.base && this.keyEdit) {
+      const keyed = this.keyEdit(id, changes);
+      const rest = Object.fromEntries(Object.entries(changes).filter(([k]) => !(k in keyed)));
+      const baseShape = this.base.find((s) => s.id === id);
+      if (baseShape && Object.keys(rest).length) Object.assign(baseShape, rest);
+    }
     Object.assign(shape, changes);
     this.emit();
   }
