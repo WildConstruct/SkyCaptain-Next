@@ -62,6 +62,7 @@ assert.ok(offStroke.cov < 0.01, `away from stroke stays clear: ${offStroke.cov}`
 console.log('cloud brush: coverage', onStroke.cov.toFixed(2), 'on stroke,', offStroke.cov.toFixed(2), 'beside it');
 
 // 2. Type brush toward towers over the left half of the stroke.
+const [typeBefore] = await weatherAt([[-20, 40]]);
 await page.keyboard.press('3');
 await page.evaluate(() => window.skyTools.setBrush({ type: 1, flow: 0.8, size: 8 }));
 await strokeOnMap([-30, 40], [-10, 40]);
@@ -86,7 +87,7 @@ await page.keyboard.press('Control+z');
 await page.keyboard.press('Control+z');
 let [restored, restoredType] = await weatherAt([[20, 40], [-20, 40]]);
 assert.ok(Math.abs(restored.cov - onStroke.cov) < 0.05, `undo restores coverage: ${restored.cov}`);
-assert.ok(Math.abs(restoredType.type - untouched.type) < 0.1, `undo restores type: ${restoredType.type}`);
+assert.ok(Math.abs(restoredType.type - typeBefore.type) < 0.1, `undo restores type: ${restoredType.type} vs ${typeBefore.type} before`);
 console.log('undo: coverage', restored.cov.toFixed(2), 'type', restoredType.type.toFixed(2));
 
 // 5. Erase in the sky: find the painted band in the view and clear across it.
