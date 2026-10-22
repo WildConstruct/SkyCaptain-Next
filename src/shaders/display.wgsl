@@ -1,0 +1,65 @@
+// Viewport: looks around the environment cube from the fixed eye.
+// The environment value (sky * T + cloud scatter + sun disc) is scene-linear.
+// PREVIEW ONLY: exposure + ACES-fit tone map + sRGB encode happen here and nowhere else.
+
+struct View {
+  right: vec4f,    // xyz, w = tan(fov/2) * aspect
+  up: vec4f,       // xyz, w = tan(fov/2)
+  forward: vec4f,  // xyz, w = exposure (EV)
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<uniform> view: View;
+@group(0) @binding(2) var cube_sampler: sampler;
+@group(0) @binding(3) var sky_tex: texture_cube<f32>;
+@group(0) @binding(4) var cloud_tex: texture_cube<f32>;
+@group(0) @binding(5) var transmittance_lut: texture_2d<f32>;
+
+struct VsOut {
+  @builtin(position) position: vec4f,
+  @location(0) ndc: vec2f,
+}
+
+@vertex
+fn vs(@builtin(vertex_index) index: u32) -> VsOut {
+  let uv = vec2f(f32((index << 1u) & 2u), f32(index & 2u));
+  var out: VsOut;
+  out.position = vec4f(uv * 2.0 - 1.0, 0.0, 1.0);
+  out.ndc = uv * 2.0 - 1.0;
+  return out;
+}
+
+fn environment(dir: vec3f) -> vec3f {
+  let sky = textureSampleLevel(sky_tex, cube_sampler, dir, 0.0).rgb;
+  let cloud = textureSampleLevel(cloud_tex, cube_sampler, dir, 0.0);
+  var background = sky;
+  let sun = params.sun_dir.xyz;
+  let radius = params.sun_color.w;
+  let cos_angle = dot(dir, sun);
+  if (cos_angle > cos(radius) && dir.y > 0.0) {
+    let mu = dir.y;
+    let t = textureSampleLevel(transmittance_lut, cube_sampler, vec2f(mu * 0.5 + 0.5, 0.0), 0.0).rgb;
+    let solid_angle = 2.0 * PI * (1.0 - cos(radius));
+    let disc = params.sun_color.rgb * params.sun_dir.w / solid_angle * t;
+    // Soft limb darkening.
+    let r = acos(clamp(cos_angle, -1.0, 1.0)) / radius;
+    background += disc * (1.0 - 0.6 * (1.0 - sqrt(max(0.0, 1.0 - r * r))));
+  }
+  return background * cloud.a + cloud.rgb;
+}
+
+fn aces_fit(x: vec3f) -> vec3f {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0));
+}
+
+fn srgb_encode(c: vec3f) -> vec3f {
+  return select(1.055 * pow(c, vec3f(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3f(0.0031308));
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4f {
+  let dir = normalize(view.forward.xyz + in.ndc.x * view.right.w * view.right.xyz + in.ndc.y * view.up.w * view.up.xyz);
+  let linear = environment(dir);
+  let exposed = linear * exp2(view.forward.w);
+  return vec4f(srgb_encode(aces_fit(exposed)), 1.0);
+}
