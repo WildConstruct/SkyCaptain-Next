@@ -14,16 +14,29 @@ page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('404'
 await page.goto('http://127.0.0.1:5173/?headless=1&noise=16&baseWeather=0&pitch=35&yaw=0');
 await page.waitForFunction(() => window.skyPaint);
 
-/** Weather map values (r coverage, g type, b density) at map km positions, after the GPU catches up. */
+/**
+ * Weather map values at map km positions, after the GPU catches up. Painted cloud becomes a
+ * field of separate cells with gaps between them, so `cov` is the strongest local weather
+ * within 3 km (cells are ~4 km apart): "is there cloud here", not one texel that may sit in
+ * a gap. Type and density are read at the point itself.
+ */
 const weatherAt = (points) => page.evaluate(async (points) => {
   for (let i = 0; i < 6; i++) await new Promise((r) => requestAnimationFrame(r));
   await window.skyRenderer.idle();
   const { size, data } = await window.skyRenderer.readWeather();
+  const texel = (x, z) => [Math.floor((x / 300 + 0.5) * size), Math.floor((z / 300 + 0.5) * size)];
+  const reach = Math.ceil((3 / 300) * size);
   return points.map(([x, z]) => {
-    const u = Math.floor((x / 300 + 0.5) * size);
-    const v = Math.floor((z / 300 + 0.5) * size);
+    const [u, v] = texel(x, z);
+    let cov = 0;
+    for (let dv = -reach; dv <= reach; dv++) {
+      for (let du = -reach; du <= reach; du++) {
+        if (du * du + dv * dv > reach * reach) continue;
+        cov = Math.max(cov, data[((v + dv) * size + (u + du)) * 4] / 255);
+      }
+    }
     const i = (v * size + u) * 4;
-    return { cov: data[i] / 255, type: data[i + 1] / 255, dens: data[i + 2] / 255 };
+    return { cov, type: data[i + 1] / 255, dens: data[i + 2] / 255 };
   });
 }, points);
 
