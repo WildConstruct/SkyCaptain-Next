@@ -46,6 +46,8 @@ export interface Settings {
   octaves: number;
   powder: number;
   seed: number;
+  /** Upward scroll of the cloud shape noise, km: clouds grow and dissolve as it rises (animation). */
+  evolve: number;
   ev: number;
   fov: number;
   yaw: number;
@@ -82,6 +84,7 @@ export const DEFAULTS: Settings = {
   octaves: 8,
   powder: 0.8,
   seed: 1,
+  evolve: 0,
   ev: 0,
   fov: 80,
   yaw: 20,
@@ -126,5 +129,6 @@ export function packParams(s: Settings, frame: number, q: Quality = QUALITY[s.qu
     s.windX, s.windZ, s.windX * 1.6, s.windZ * 1.6,
     q.viewSteps, q.lightSteps, q.faceSize, frame,
     s.haze, s.groundAlbedo, s.seed, s.octaves,
+    s.evolve, 0, 0, 0,
   ]);
 }

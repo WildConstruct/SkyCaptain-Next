@@ -7,6 +7,8 @@ import { BrushPanel } from './ui/brush-panel';
 import { SkyGraph } from './psg';
 import { PsgPanel } from './ui/psg-panel';
 import { ExportPanel, download } from './ui/export-panel';
+import { AnimatePanel } from './ui/animate-panel';
+import { renderSequence, type SequenceOptions } from './sequence';
 import { paintTilesOf, parseSky, saveSky } from './document';
 import { LooksPanel } from './ui/looks-panel';
 import * as presets from './presets';
@@ -197,7 +199,7 @@ async function main(): Promise<void> {
   let skyId: string = crypto.randomUUID();
   saveButton.onclick = () => {
     const description = describeSky(settings, store.shapes, layers.hasContent, skyVocab);
-    const json = saveSky(settings, store.shapes, layers, skyGraph, { name: description.suggestion, moniker: monikerBlock(skyId, description) });
+    const json = saveSky(settings, store.shapes, layers, skyGraph, { name: description.suggestion, moniker: monikerBlock(skyId, description) }, animatePanel.value);
     download(`${description.suggestion}.wcx`, json, 'application/json');
   };
   openButton.onclick = () => openInput.click();
@@ -260,6 +262,7 @@ async function main(): Promise<void> {
     store.replaceAll(doc.shapes);
     layers.importTiles(tiles);
     skyGraph.restore(doc.graph);
+    animatePanel.value = doc.animation;
     history.clear();
   }
   Object.assign(window, { skyOpen: openSky });
@@ -274,6 +277,23 @@ async function main(): Promise<void> {
   const skyName = () => describeSky(settings, store.shapes, layers.hasContent, skyVocab).suggestion;
   const fileStem = () => skyName();
   new ExportPanel(exportRoot, renderer, fileStem);
+
+  const animateSection = document.createElement('details');
+  const animateSummary = document.createElement('summary');
+  animateSummary.textContent = 'Animate';
+  const animateRoot = document.createElement('div');
+  animateSection.append(animateSummary, animateRoot);
+  panel.append(animateSection);
+  const animatePanel = new AnimatePanel(animateRoot, renderer, settings, fileStem);
+  // tools/smoke-animate.mjs renders sequences through this with an in-memory sink.
+  Object.assign(window, {
+    skyAnimate: animatePanel,
+    skySequence: (options: SequenceOptions, range?: [number, number]) => {
+      const frames: { name: string; bytes: Uint8Array }[] = [];
+      return renderSequence(renderer, animatePanel.value, options, async (name, bytes) => { frames.push({ name, bytes }); }, undefined, undefined, range)
+        .then(() => frames);
+    },
+  });
 
   const graphSection = document.createElement('details');
   graphSection.open = true;

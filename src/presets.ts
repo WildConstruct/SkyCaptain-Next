@@ -14,7 +14,7 @@ export const LOOK_VOCABULARY = JSON.parse(lookVocabulary);
 
 /** Settings a look carries. View, quality and the composition of the sky are left out. */
 export const LOOK_KEYS = (Object.keys(DEFAULTS) as (keyof Settings)[]).filter(
-  (k) => !['ev', 'fov', 'yaw', 'pitch', 'quality', 'seed', 'weatherScale', 'baseWeather'].includes(k),
+  (k) => !['ev', 'fov', 'yaw', 'pitch', 'quality', 'seed', 'weatherScale', 'baseWeather', 'evolve'].includes(k),
 );
 
 export interface LookPreset extends WcxFile {

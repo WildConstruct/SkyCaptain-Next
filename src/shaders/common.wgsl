@@ -10,6 +10,7 @@ struct Params {
   wind: vec4f,        // shape offset xz (km), detail offset xz (km)
   march: vec4f,       // max view steps, light steps, cube face size, frame index
   misc: vec4f,        // haze distance, ground albedo, weather seed, scattering octave count
+  anim: vec4f,        // x = evolution: upward scroll of the shape noise (km); yzw unused
 }
 
 const PI: f32 = 3.14159265358979;

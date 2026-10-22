@@ -125,7 +125,9 @@ fn sample_media(w: Weather, p: vec3f, altitude: f32, mip: f32, jitter: f32) -> M
   let turbulence = TURBULENCE_DISPLACEMENT_KM
     * (textureSampleLevel(shape_tex, repeat_sampler, vec3f(turbulence_uv, 0.5), 0.0).gba * 2.0 - 1.0)
     * density * remap_clamped(w.hf, 0.3, 0.0);
-  let local = vec3f(p.x + params.wind.x, altitude, p.z + params.wind.y) + turbulence;
+  // Evolution (Takram): the shape noise scrolls upward through the cloud, so clouds grow and
+  // dissolve over an animation instead of only sliding.
+  let local = vec3f(p.x + params.wind.x, altitude - params.anim.x, p.z + params.wind.y) + turbulence;
   let shape = textureSampleLevel(shape_tex, repeat_sampler, local / params.scale.x, 0.0).r;
   density = remap_clamped(density, (1.0 - shape) * SHAPE_AMOUNT, 1.0);
 

@@ -9,6 +9,7 @@ import { DEFAULTS, type Settings } from './settings';
 import type { ShapeLayer } from './shapes';
 import type { MonikerBlock } from './moniker/skycaptain';
 import { header, paramsOf, settingOf, wcxError, type WcxFile } from './wcx';
+import { DEFAULT_ANIMATION, parseAnimation, type Animation } from './animation';
 
 const LEGACY_FORMAT = 'skycaptain.sky';
 
@@ -17,6 +18,8 @@ interface Composition {
   /** Non-empty 64x64 tiles; data is base64 of little-endian int16 (paint) or float32 (warp). */
   paint: { size: number; tiles: { layer: PaintTile['layer']; tx: number; ty: number; data: string }[] };
   graph: SkyGraphState | null;
+  /** How the sky moves over time (animation.ts). Older files have none: the default. */
+  animation?: Animation;
 }
 
 export interface SkyFile extends WcxFile {
@@ -30,6 +33,7 @@ export interface OpenedSky extends Composition {
   moniker?: MonikerBlock;
   /** Only the settings the file had; the caller fills the rest from defaults. */
   settings: Partial<Settings>;
+  animation: Animation;
 }
 
 /** Every setting a sky file carries. Quality is the viewer's machine, not the sky. */
@@ -54,6 +58,7 @@ export function saveSky(
   layers: PaintLayers,
   graph: SkyGraph,
   naming: { name: string; moniker: MonikerBlock },
+  animation: Animation = DEFAULT_ANIMATION,
 ): string {
   const file: SkyFile = {
     ...header('sky', naming.name, 'Skies', naming.moniker),
@@ -67,6 +72,7 @@ export function saveSky(
         })),
       },
       graph: graph.snapshot(),
+      animation,
     },
   };
   return JSON.stringify(file);
@@ -84,7 +90,7 @@ export function parseSky(text: string): OpenedSky {
   if (legacy && legacy.format === LEGACY_FORMAT) {
     if (legacy.version !== 1) throw new Error(`Unsupported sky file version ${String(legacy.version)}.`);
     const { quality: _quality, ...settings } = legacy.settings ?? {};
-    return { name: legacy.name, moniker: legacy.moniker, settings, shapes: legacy.shapes, paint: legacy.paint, graph: legacy.graph };
+    return { name: legacy.name, moniker: legacy.moniker, settings, shapes: legacy.shapes, paint: legacy.paint, graph: legacy.graph, animation: { ...DEFAULT_ANIMATION } };
   }
   const error = wcxError(raw);
   if (error) throw new Error(`This is ${error}.`);
@@ -95,7 +101,7 @@ export function parseSky(text: string): OpenedSky {
     const key = settingOf(p);
     if (key && typeof p.value === 'number' && Number.isFinite(p.value)) (settings[key] as number) = p.value;
   }
-  return { name: file.name, moniker: file.moniker, settings, ...file.sky };
+  return { name: file.name, moniker: file.moniker, settings, ...file.sky, animation: parseAnimation(file.sky.animation) };
 }
 
 export function paintTilesOf(doc: OpenedSky, size: number): PaintTile[] {

@@ -11,6 +11,8 @@ import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
 import type { LayerName } from './paint';
 
 const SKY_FACE = 256;
+/** 11 vec4f: must match Params in common.wgsl. */
+const PARAMS_BYTES = 176;
 export const WEATHER_SIZE = 1024;
 const TRANSMITTANCE_SIZE: [number, number] = [256, 64];
 const MS_SIZE = 32;
@@ -32,6 +34,9 @@ export class Renderer {
   private context: GPUCanvasContext | null;
   private format: GPUTextureFormat;
   private settings: Settings;
+  /** The sky as composed; `settings` is this after the animation time is applied. */
+  private base: Settings;
+  private timeTransform: ((s: Settings) => Settings) | null = null;
 
   private paramsBuffer: GPUBuffer;
   private viewBuffer: GPUBuffer;
@@ -91,12 +96,13 @@ export class Renderer {
 
   private constructor(device: GPUDevice, canvas: HTMLCanvasElement | null, settings: Settings, noise: NoiseSizes) {
     this.device = device;
+    this.base = { ...settings };
     this.settings = { ...settings };
     this.context = canvas ? (canvas.getContext('webgpu') as GPUCanvasContext) : null;
     this.format = canvas ? navigator.gpu.getPreferredCanvasFormat() : 'rgba8unorm';
     this.context?.configure({ device, format: this.format, alphaMode: 'opaque' });
 
-    this.paramsBuffer = device.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.paramsBuffer = device.createBuffer({ size: PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.viewBuffer = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.repeatSampler = device.createSampler({
       magFilter: 'linear', minFilter: 'linear',
@@ -179,8 +185,20 @@ export class Renderer {
     this.pending.add('weather');
   }
 
+  /**
+   * Shows the sky at an animation time: `transform` maps the composed settings to the
+   * settings at that time (animation.ts settingsAt), or null for the sky as composed. Edits
+   * keep arriving through update() and stay under the same time.
+   */
+  setTime(transform: ((s: Settings) => Settings) | null, invalidation: Invalidation): void {
+    this.timeTransform = transform;
+    this.settings = transform ? transform(this.base) : { ...this.base };
+    this.pending.add(invalidation);
+  }
+
   update(settings: Settings, invalidation: Invalidation): void {
-    this.settings = { ...settings };
+    this.base = { ...settings };
+    this.settings = this.timeTransform ? this.timeTransform(this.base) : { ...this.base };
     this.pending.add(invalidation);
   }
 
@@ -262,7 +280,7 @@ export class Renderer {
     const face = Math.min(2048, Math.max(256, Math.round(width / 4 / 4) * 4));
     const quality: Quality = { label: 'export', faceSize: face, viewSteps: 500, lightSteps: 6, samples };
     this.exporting = true;
-    const params = d.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const params = d.createBuffer({ size: PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const accum = d.createBuffer({ size: 6 * face * face * 8, usage: GPUBufferUsage.STORAGE });
     const cube = d.createTexture({
       size: [face, face, 6], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
