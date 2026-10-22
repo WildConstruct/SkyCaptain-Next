@@ -1,0 +1,188 @@
+{
+  "plugin": "skyCaptain Sky",
+  "id": "skycaptain-sky",
+  "version": "1.0",
+  "locale": "en-US",
+  "noun": null,
+  "max_tokens": 3,
+  "slot_order": [
+    "mood",
+    "cover",
+    "clarity",
+    "time",
+    "scene"
+  ],
+  "slots": {
+    "mood": {
+      "weight": 4,
+      "required": false,
+      "parameter": "mood",
+      "conditional": true,
+      "mappings": [
+        {
+          "value": "none",
+          "token": null
+        },
+        {
+          "value": "brooding",
+          "token": "Brooding"
+        },
+        {
+          "value": "soft",
+          "token": "Soft"
+        },
+        {
+          "value": "luminous",
+          "token": "Luminous"
+        }
+      ]
+    },
+    "clarity": {
+      "weight": 2,
+      "required": false,
+      "parameter": "haze",
+      "mappings": [
+        {
+          "range": [
+            0,
+            12
+          ],
+          "token": "Milky"
+        },
+        {
+          "range": [
+            12,
+            22
+          ],
+          "token": "Hazy"
+        },
+        {
+          "range": [
+            22,
+            60
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            60,
+            1000
+          ],
+          "token": "Crisp"
+        }
+      ]
+    },
+    "time": {
+      "weight": 4,
+      "required": false,
+      "parameter": "time",
+      "mappings": [
+        {
+          "value": "twilight",
+          "token": "Twilight"
+        },
+        {
+          "value": "golden",
+          "token": "Golden-Hour"
+        },
+        {
+          "value": "low",
+          "token": "Low-Sun"
+        },
+        {
+          "value": "day",
+          "token": null
+        },
+        {
+          "value": "high",
+          "token": "Midday"
+        }
+      ]
+    },
+    "cover": {
+      "weight": 2,
+      "required": false,
+      "parameter": "coverage",
+      "mappings": [
+        {
+          "range": [
+            0,
+            0.28
+          ],
+          "token": "Clear"
+        },
+        {
+          "range": [
+            0.28,
+            0.46
+          ],
+          "token": "Fair"
+        },
+        {
+          "range": [
+            0.46,
+            0.62
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            0.62,
+            0.8
+          ],
+          "token": "Broken"
+        },
+        {
+          "range": [
+            0.8,
+            1
+          ],
+          "token": "Overcast"
+        }
+      ]
+    },
+    "scene": {
+      "weight": 5,
+      "required": true,
+      "parameter": "scene",
+      "mappings": [
+        {
+          "value": "storms",
+          "token": "Thunderstorms"
+        },
+        {
+          "value": "storm",
+          "token": "Thunderstorm"
+        },
+        {
+          "value": "squall",
+          "token": "Squall Line"
+        },
+        {
+          "value": "front",
+          "token": "Weather Front"
+        },
+        {
+          "value": "clearing",
+          "token": "Clearing"
+        },
+        {
+          "value": "haze",
+          "token": "Haze"
+        },
+        {
+          "value": "cumulus",
+          "token": "Cumulus"
+        },
+        {
+          "value": "painted",
+          "token": "Cloudscape"
+        },
+        {
+          "value": "open",
+          "token": "Sky"
+        }
+      ]
+    }
+  }
+}

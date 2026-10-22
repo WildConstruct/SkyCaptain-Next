@@ -1,0 +1,338 @@
+{
+  "plugin": "skyCaptain Look",
+  "id": "skycaptain-look",
+  "version": "1.0",
+  "locale": "en-US",
+  "noun": "Sky",
+  "max_tokens": 3,
+  "slot_order": [
+    "mood",
+    "wind",
+    "texture",
+    "density",
+    "cover",
+    "clarity",
+    "sun",
+    "time",
+    "form"
+  ],
+  "slots": {
+    "mood": {
+      "weight": 5,
+      "required": false,
+      "parameter": "mood",
+      "conditional": true,
+      "mappings": [
+        {
+          "value": "none",
+          "token": null
+        },
+        {
+          "value": "brooding",
+          "token": "Brooding"
+        },
+        {
+          "value": "soft",
+          "token": "Soft"
+        },
+        {
+          "value": "luminous",
+          "token": "Luminous"
+        }
+      ]
+    },
+    "wind": {
+      "weight": 2,
+      "required": false,
+      "parameter": "windKm",
+      "mappings": [
+        {
+          "range": [
+            0,
+            12
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            12,
+            1000
+          ],
+          "token": "Windswept"
+        }
+      ]
+    },
+    "texture": {
+      "weight": 1,
+      "required": false,
+      "parameter": "erosion",
+      "mappings": [
+        {
+          "range": [
+            0,
+            0.15
+          ],
+          "token": "Smooth"
+        },
+        {
+          "range": [
+            0.15,
+            0.7
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            0.7,
+            1
+          ],
+          "token": "Ragged"
+        }
+      ]
+    },
+    "density": {
+      "weight": 2,
+      "required": false,
+      "parameter": "density",
+      "mappings": [
+        {
+          "range": [
+            0,
+            15
+          ],
+          "token": "Wispy"
+        },
+        {
+          "range": [
+            15,
+            45
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            45,
+            80
+          ],
+          "token": "Dense"
+        },
+        {
+          "range": [
+            80,
+            1000
+          ],
+          "token": "Heavy"
+        }
+      ]
+    },
+    "clarity": {
+      "weight": 3,
+      "required": false,
+      "parameter": "haze",
+      "mappings": [
+        {
+          "range": [
+            0,
+            12
+          ],
+          "token": "Milky"
+        },
+        {
+          "range": [
+            12,
+            22
+          ],
+          "token": "Hazy"
+        },
+        {
+          "range": [
+            22,
+            60
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            60,
+            1000
+          ],
+          "token": "Crisp"
+        }
+      ]
+    },
+    "sun": {
+      "weight": 1,
+      "required": false,
+      "parameter": "sunIntensity",
+      "mappings": [
+        {
+          "range": [
+            0,
+            9
+          ],
+          "token": "Dim"
+        },
+        {
+          "range": [
+            9,
+            40
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            40,
+            1000
+          ],
+          "token": "Blazing"
+        }
+      ]
+    },
+    "time": {
+      "weight": 5,
+      "required": false,
+      "parameter": "time",
+      "mappings": [
+        {
+          "value": "twilight",
+          "token": "Twilight"
+        },
+        {
+          "value": "golden",
+          "token": "Golden-Hour"
+        },
+        {
+          "value": "low",
+          "token": "Low-Sun"
+        },
+        {
+          "value": "day",
+          "token": null
+        },
+        {
+          "value": "high",
+          "token": "Midday"
+        }
+      ]
+    },
+    "cover": {
+      "weight": 4,
+      "required": false,
+      "parameter": "coverage",
+      "mappings": [
+        {
+          "range": [
+            0,
+            0.28
+          ],
+          "token": "Clear"
+        },
+        {
+          "range": [
+            0.28,
+            0.46
+          ],
+          "token": "Fair"
+        },
+        {
+          "range": [
+            0.46,
+            0.62
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            0.62,
+            0.8
+          ],
+          "token": "Broken"
+        },
+        {
+          "range": [
+            0.8,
+            1
+          ],
+          "token": "Overcast"
+        }
+      ]
+    },
+    "form": {
+      "weight": 3,
+      "required": false,
+      "parameter": "typeBias",
+      "mappings": [
+        {
+          "range": [
+            -1,
+            -0.35
+          ],
+          "token": "Layered"
+        },
+        {
+          "range": [
+            -0.35,
+            0.25
+          ],
+          "token": null
+        },
+        {
+          "range": [
+            0.25,
+            0.6
+          ],
+          "token": "Billowing"
+        },
+        {
+          "range": [
+            0.6,
+            1
+          ],
+          "token": "Towering"
+        }
+      ]
+    }
+  },
+  "composites": [
+    {
+      "token": "Overcast",
+      "role": "noun",
+      "requires": {
+        "cover": "Overcast"
+      }
+    },
+    {
+      "token": "Thunderheads",
+      "role": "noun",
+      "requires": {
+        "form": "Towering",
+        "density": [
+          "Dense",
+          "Heavy"
+        ]
+      }
+    },
+    {
+      "token": "Haze",
+      "role": "noun",
+      "requires": {
+        "clarity": "Milky",
+        "cover": [
+          "Clear",
+          "Fair"
+        ]
+      }
+    },
+    {
+      "token": "Afterglow",
+      "role": "noun",
+      "requires": {
+        "time": "Twilight",
+        "cover": [
+          "Clear",
+          "Fair"
+        ]
+      }
+    }
+  ]
+}

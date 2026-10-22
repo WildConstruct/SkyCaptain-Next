@@ -6,6 +6,7 @@ import type { PaintLayers, PaintTile } from './paint';
 import type { SkyGraph, SkyGraphState } from './psg';
 import type { Settings } from './settings';
 import type { ShapeLayer } from './shapes';
+import type { MonikerBlock } from './moniker/skycaptain';
 
 export const SKY_FORMAT = 'skycaptain.sky';
 export const SKY_VERSION = 1;
@@ -14,6 +15,10 @@ export interface SkyDocument {
   format: typeof SKY_FORMAT;
   version: typeof SKY_VERSION;
   savedAt: string;
+  /** Display name: Moniker's suggestion unless the artist renamed it. */
+  name?: string;
+  /** Stable identity and the deterministic fallback name (skycaptain-sky.moniker). */
+  moniker?: MonikerBlock;
   settings: Settings;
   shapes: ShapeLayer[];
   /** Non-empty 64x64 tiles; data is base64 of little-endian int16 (paint) or float32 (warp). */
@@ -34,11 +39,18 @@ function fromBase64(text: string): Uint8Array {
   return out;
 }
 
-export function saveSky(settings: Settings, shapes: ShapeLayer[], layers: PaintLayers, graph: SkyGraph): string {
+export function saveSky(
+  settings: Settings,
+  shapes: ShapeLayer[],
+  layers: PaintLayers,
+  graph: SkyGraph,
+  naming?: { name: string; moniker: MonikerBlock },
+): string {
   const doc: SkyDocument = {
     format: SKY_FORMAT,
     version: SKY_VERSION,
     savedAt: new Date().toISOString(),
+    ...naming,
     settings: { ...settings },
     shapes: shapes.map((s) => ({ ...s })),
     paint: {

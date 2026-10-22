@@ -80,3 +80,9 @@ button:hover, select:hover { border-color: var(--accent); }
 .holds li span { color: var(--muted); }
 
 progress { width: 100%; accent-color: var(--accent); }
+
+.looks .chip { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 4px; }
+.looks .chip button { border: 0; padding: 3px 7px; font-size: 11px; }
+.looks .chip.user { border-color: #3b5b85; }
+.save-look input[type=text] { flex: 3; min-width: 0; background: #0f1216; color: var(--text); border: 1px solid var(--accent); border-radius: 4px; padding: 5px 8px; font: inherit; }
+.save-look button { flex: 0 0 auto; }

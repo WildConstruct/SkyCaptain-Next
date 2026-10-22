@@ -9,5 +9,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src", "vendor/*.d.ts"]
+  "include": ["src", "vendor/**/*.d.ts"]
 }

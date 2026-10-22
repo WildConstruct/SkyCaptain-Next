@@ -8,7 +8,9 @@ import { SkyGraph } from './psg';
 import { PsgPanel } from './ui/psg-panel';
 import { ExportPanel, download } from './ui/export-panel';
 import { paintTilesOf, parseSky, saveSky } from './document';
-import { VIBES } from './vibes';
+import { LooksPanel } from './ui/looks-panel';
+import skyVocabulary from './moniker/skycaptain-sky.moniker?raw';
+import { describeSky, monikerBlock } from './moniker/skycaptain';
 import { viewUniforms } from './camera';
 import { ShapeKind, ShapeLayer, ShapeStore, createShape } from './shapes';
 import { SkyOverlay } from './ui/sky-overlay';
@@ -126,6 +128,7 @@ async function main(): Promise<void> {
   const layers = new PaintLayers(WEATHER_SIZE, history);
   layers.extent = settings.weatherScale;
   const tools = new ToolState();
+  const skyVocab = JSON.parse(skyVocabulary);
   const stroke = new Stroke(layers, tools);
   store.shapes = readUrlShapes(query);
   renderer.setShapes(store.shapes);
@@ -184,7 +187,13 @@ async function main(): Promise<void> {
   openInput.hidden = true;
   docRow.append(saveButton, openButton, openInput);
   panel.append(docRow);
-  saveButton.onclick = () => download(`${fileStem()}.sky.json`, saveSky(settings, store.shapes, layers, skyGraph), 'application/json');
+  // A sky keeps one identity across saves in a session; opening a file adopts its id.
+  let skyId: string = crypto.randomUUID();
+  saveButton.onclick = () => {
+    const description = describeSky(settings, store.shapes, layers.hasContent, skyVocab);
+    const json = saveSky(settings, store.shapes, layers, skyGraph, { name: description.suggestion, moniker: monikerBlock(skyId, description) });
+    download(`${description.suggestion}.sky.json`, json, 'application/json');
+  };
   openButton.onclick = () => openInput.click();
   openInput.onchange = async () => {
     const file = openInput.files?.[0];
@@ -197,18 +206,14 @@ async function main(): Promise<void> {
     }
   };
 
-  const vibeRow = document.createElement('div');
-  vibeRow.className = 'chips vibes';
-  for (const vibe of VIBES) {
-    const b = document.createElement('button');
-    b.textContent = vibe.name;
-    b.title = `${vibe.hint}. Keeps your shapes and paint.`;
-    b.onclick = () => {
-      for (const [key, value] of Object.entries(vibe.settings)) set(key as keyof Settings, value as number);
-    };
-    vibeRow.append(b);
-  }
-  panel.append(vibeRow);
+  const looksSection = document.createElement('details');
+  looksSection.open = true;
+  const looksSummary = document.createElement('summary');
+  looksSummary.textContent = 'Looks';
+  const looksRoot = document.createElement('div');
+  looksSection.append(looksSummary, looksRoot);
+  panel.append(looksSection);
+  new LooksPanel(looksRoot, settings, set);
 
   const mapCanvas = document.createElement('canvas');
   mapCanvas.className = 'minimap';
@@ -218,6 +223,7 @@ async function main(): Promise<void> {
 
   function openSky(text: string): void {
     const doc = parseSky(text);
+    if (doc.moniker?.id) skyId = doc.moniker.id;
     const tiles = paintTilesOf(doc, layers.size);
     for (const key of Object.keys(DEFAULTS) as (keyof Settings)[]) {
       const v = doc.settings[key] ?? DEFAULTS[key];
@@ -240,11 +246,9 @@ async function main(): Promise<void> {
   const exportRoot = document.createElement('div');
   exportSection.append(exportSummary, exportRoot);
   panel.append(exportSection);
-  const fileStem = () => {
-    const caption = skyGraph.last?.caption;
-    const slug = caption ? caption.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) : '';
-    return `skycaptain-${slug || new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}`;
-  };
+  // Files are named by Moniker from what the sky is: "Hazy Golden-Hour Squall Line".
+  const skyName = () => describeSky(settings, store.shapes, layers.hasContent, skyVocab).suggestion;
+  const fileStem = () => skyName();
   new ExportPanel(exportRoot, renderer, fileStem);
 
   const graphSection = document.createElement('details');

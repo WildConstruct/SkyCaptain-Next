@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
-    "shot": "node tools/screenshot.mjs"
+    "shot": "node tools/screenshot.mjs",
+    "test": "node --experimental-strip-types --no-warnings --test tests/*.test.mjs"
   },
   "devDependencies": {
     "@webgpu/types": "^0.1.51",
