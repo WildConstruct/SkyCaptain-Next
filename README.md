@@ -43,6 +43,7 @@ Quality tiers: Laptop (M1) 512² × 64 steps, Desktop 768² × 96, Ultra 1024² 
    density, erase, wind smudge and scatter brushes, painted directly in the sky.
 5. **Shapes and randomize.** Vector shapes as weather generators (cumulus field,
    storm cell, front line, clear hole, haze sheet), each with a seed. Reroll
-   unlocked layers. PSD layer import is a possible authoring path.
+   unlocked layers. A Prompt Spaghetti graph can drive the shapes and sky
+   settings; see [docs/psg-weather.md](docs/psg-weather.md).
 6. **Vibes and export.** Look presets (sun + atmosphere + clouds), lat-long
    `.hdr`/`.exr` export from the cube, and a recipe/WCX document.
