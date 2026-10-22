@@ -111,11 +111,18 @@ fn takram_background(xz: vec2f, seed: u32) -> vec2f {
   return vec2f(low, mid);
 }
 
-// Where clouds may form inside an authored area: soft bumps ~3 km apart with real gaps.
-// The fBm's median is ~1.17; this window leaves about a quarter of the area empty and
-// puts the median at ~0.3, so each cell domes on its own instead of merging into a slab.
-fn authored_cells(xz: vec2f, seed: u32) -> f32 {
-  return smoothstep(1.05, 1.4, cell_fbm(xz / WEATHER_TILE_KM, 24.0, seed + 31u));
+// Where clouds may form inside an authored area: soft bumps with real gaps between them.
+// The fBm's median is ~1.17; for cumulus the window leaves about a quarter of the area
+// empty, so each ~4 km cell domes on its own instead of merging into a slab. Cell size and
+// fill follow the cloud type: towers get broad ~8 km cells (a 4 km cell stretched 10 km
+// tall is a spire), stratiform fills in toward a sheet.
+fn authored_cells(xz: vec2f, kind: f32, seed: u32) -> f32 {
+  let p = xz / WEATHER_TILE_KM;
+  let tower = smoothstep(0.55, 0.85, kind);
+  let stratus = 1.0 - smoothstep(0.1, 0.35, kind);
+  let fbm = mix(cell_fbm(p, 24.0, seed + 31u), cell_fbm(p, 12.0, seed + 57u), tower);
+  let lo = mix(1.05, 0.8, stratus);
+  return smoothstep(lo, lo + 0.35, fbm);
 }
 
 struct Local {
@@ -227,6 +234,6 @@ fn generate(@builtin(global_invocation_id) id: vec3u) {
   cell.density = clamp(cell.density + paint.a, 0.05, 1.0);
 
   let open = 1.0 - cell.clear;
-  let local_weather = max(max(background * open, cell.amount * authored_cells(xz, seed_u)), cell.sheet);
+  let local_weather = max(max(background * open, cell.amount * authored_cells(xz, cell.kind, seed_u)), cell.sheet);
   textureStore(weather_out, id.xy, vec4f(local_weather, cell.kind, cell.density, open));
 }
