@@ -446,9 +446,17 @@ fn render(@builtin(global_invocation_id) id: vec3u) {
 
   let index = (face * size + texel.y) * size + texel.x;
   var resolved = value;
+  // Ground texels skip the first pass: it ran before any downwelling light was integrated
+  // (the cube was still empty), so it would leave a dark 4x4 dot pattern in the average.
+  let ground = cube_dir(face, (vec2f(texel) + 0.5) / f32(size)).y <= 0.0;
   if (pass_index > 0u) {
     let previous = unpack(accum[index]);
-    resolved = previous + (value - previous) / f32(pass_index + 1u);
+    if (ground && pass_index == 1u) {
+      resolved = value;
+    } else {
+      let n = select(pass_index + 1u, pass_index, ground);
+      resolved = previous + (value - previous) / f32(n);
+    }
   }
   accum[index] = pack(resolved);
 
