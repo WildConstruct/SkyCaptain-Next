@@ -39,7 +39,7 @@ const wcx = JSON.parse(readFileSync(wcxPath, 'utf8'));
 assert.equal(wcx._format, 'wcx');
 assert.equal(wcx._plugin, 'skycaptain');
 assert.equal(wcx.kind, 'look');
-assert.equal(wcx.moniker.vocabulary, 'skycaptain-look@2.0');
+assert.equal(wcx.moniker.vocabulary, 'skycaptain-look@2.1');
 assert.equal(wcx.moniker.fallback, 'Brooding Golden-Hour Sky');
 assert.ok(wcx.moniker.tokens.includes('Hazy'), 'trimmed tokens are still recorded');
 assert.ok(wcx.params.some((p) => p.id === 'haze' && p.value === 15));
@@ -89,7 +89,7 @@ await skyDownload.saveAs('shots/looks/sky.wcx');
 const doc = JSON.parse(readFileSync('shots/looks/sky.wcx', 'utf8'));
 assert.equal(doc.kind, 'sky');
 assert.equal(doc.name, 'Brooding Golden-Hour Squall Line');
-assert.equal(doc.moniker.vocabulary, 'skycaptain-sky@2.0');
+assert.equal(doc.moniker.vocabulary, 'skycaptain-sky@2.1');
 
 // A sky .wcx imports as a look: only its look settings, never its composition.
 await page.evaluate(() => { window.skyGraph['settings'].sunElevation = 50; });

@@ -107,7 +107,7 @@ test('recognisable looks get their own noun', () => {
   assert.equal(name({ typeBias: 0.7, density: 400 }), 'Thunderheads');
   assert.equal(name({ haze: 8, coverage: 0.1 }), 'Haze');
   assert.equal(name({ coverage: 0.7, ambient: 0.6, density: 350 }), 'Brooding Dense Overcast');
-  assert.equal(name({ sunElevation: 70, haze: 90, coverage: 0.1 }), 'Clear Midday Sky');
+  assert.equal(name({ sunElevation: 70, haze: 90, coverage: 0.05 }), 'Clear Midday Sky');
 });
 
 test('whole skies are named for the weather composed in them', () => {

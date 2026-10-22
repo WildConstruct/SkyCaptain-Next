@@ -61,7 +61,7 @@ export const DEFAULTS: Settings = {
   sunIntensity: 20,
   haze: 30,
   groundAlbedo: 0.25,
-  coverage: 0.35,
+  coverage: 0.25,
   typeBias: 0,
   density: 200,
   erosion: 1,

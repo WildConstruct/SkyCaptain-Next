@@ -8,7 +8,7 @@ Names keep at most `max_tokens` words, counting the noun. Heavier slots survive
 trimming, and survivors are put back in `slot_order`. When a name is already taken,
 trimmed words are promoted back in before a number is added.
 
-## Look presets: `skycaptain-look@2.0`
+## Look presets: `skycaptain-look@2.1`
 
 Names looks (.wcx) in the Looks panel.
 
@@ -20,7 +20,7 @@ Noun: **Sky**. Max tokens: 3. Order: mood → wind → texture → density → c
 | wind | 2 | windKm (drift distance, √(driftX² + driftZ²) km) | 0 to 12: (nothing); 12 to 1000: **Windswept** |
 | texture | 1 | erosion | 0 to 0.4: **Smooth**; 0.4 to 1.4: (nothing); 1.4 to 2: **Ragged** |
 | density | 2 | density | 0 to 100: **Wispy**; 100 to 300: (nothing); 300 to 530: **Dense**; 530 to 1000: **Heavy** |
-| cover | 4 | coverage | 0 to 0.15: **Clear**; 0.15 to 0.3: **Fair**; 0.3 to 0.42: (nothing); 0.42 to 0.6: **Broken**; 0.6 to 1: **Overcast** |
+| cover | 4 | coverage | 0 to 0.1: **Clear**; 0.1 to 0.2: **Fair**; 0.2 to 0.35: (nothing); 0.35 to 0.55: **Broken**; 0.55 to 1: **Overcast** |
 | clarity | 3 | haze | 0 to 12: **Milky**; 12 to 22: **Hazy**; 22 to 60: (nothing); 60 to 1000: **Crisp** |
 | sun | 1 | sunIntensity | 0 to 9: **Dim**; 9 to 40: (nothing); 40 to 1000: **Blazing** |
 | time | 5 | time (sun elevation: below 0° twilight, below 8° golden, below 22° low, below 55° day, else high) | twilight: **Twilight**; golden: **Golden-Hour**; low: **Low-Sun**; day: (nothing); high: **Midday** |
@@ -33,7 +33,7 @@ Composite nouns (replace the noun when every condition fires):
 - **Haze**: clarity = Milky, cover = Clear or Fair
 - **Afterglow**: time = Twilight, cover = Clear or Fair
 
-## Whole skies: `skycaptain-sky@2.0`
+## Whole skies: `skycaptain-sky@2.1`
 
 Names sky .wcx files and HDRI exports.
 
@@ -42,7 +42,7 @@ Noun: **(from the scene slot)**. Max tokens: 3. Order: mood → cover → clarit
 | Slot | Weight | Reads | Words |
 | --- | --- | --- | --- |
 | mood | 4 | mood (brooding = density ≥ 270 and ambient ≤ 0.75; soft = ambient ≥ 1.25 and powder ≤ 0.5; luminous = silver lining ≥ 0.86 and density < 270) | none: (nothing); brooding: **Brooding**; soft: **Soft**; luminous: **Luminous** |
-| cover | 2 | coverage | 0 to 0.15: **Clear**; 0.15 to 0.3: **Fair**; 0.3 to 0.42: (nothing); 0.42 to 0.6: **Broken**; 0.6 to 1: **Overcast** |
+| cover | 2 | coverage | 0 to 0.1: **Clear**; 0.1 to 0.2: **Fair**; 0.2 to 0.35: (nothing); 0.35 to 0.55: **Broken**; 0.55 to 1: **Overcast** |
 | clarity | 2 | haze | 0 to 12: **Milky**; 12 to 22: **Hazy**; 22 to 60: (nothing); 60 to 1000: **Crisp** |
 | time | 4 | time (sun elevation: below 0° twilight, below 8° golden, below 22° low, below 55° day, else high) | twilight: **Twilight**; golden: **Golden-Hour**; low: **Low-Sun**; day: (nothing); high: **Midday** |
 | scene (required) | 5 | scene (visible shapes at strength ≥ 0.3: front + storm = squall; 2+ storms = storms; 1 storm; front; clear hole = clearing; haze sheet; cumulus field; else painted if any paint, else open) | storms: **Thunderstorms**; storm: **Thunderstorm**; squall: **Squall Line**; front: **Weather Front**; clearing: **Clearing**; haze: **Haze**; cumulus: **Cumulus**; painted: **Cloudscape**; open: **Sky** |
