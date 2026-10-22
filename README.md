@@ -41,10 +41,11 @@ over the procedural background weather (its strength is the **Background
 weather** slider) and write coverage, cloud type and density into the weather
 map:
 
-- **Cumulus field:** separate fair-weather cumulus islands.
-- **Storm cell:** a towering, dome-shaped core with a broken ring of outflow cumulus.
-- **Front:** a band of cloud, with towers on the leading edge and stratiform cloud behind.
-- **Clear hole:** removes coverage.
+- **Cumulus field:** a field of separate fair-weather cumulus.
+- **Storm cell:** one big tower that tapers to a domed top, with a broken ring of
+  outflow cumulus around its base.
+- **Front:** a band of turrets on the leading edge with lower, flatter cloud behind.
+- **Clear hole:** clear sky, even under an overcast look (it holds off the global coverage).
 - **Haze sheet:** thin, low-density stratus.
 
 Each cloud type has its own height. Stratus are about 0.35 km, cumulus use
@@ -66,11 +67,17 @@ against the dev server.
 
 ![Painting](docs/look/paint-001.png)
 
-Paint layers are applied after the shapes. Brushes (keys 1 to 6; V returns to Shapes):
+Paint layers are applied after the shapes. Shapes and paint say *how much* cloud goes
+where; the weather map turns that amount into a field of separate soft cells, one per
+cloud, so a painted area becomes a field of domed cumulus rather than a slab. Cell size
+follows the cloud type: towers are broad, stratiform fills in toward a sheet.
 
-- **Cloud:** adds coverage up to **Max coverage**. Below 1, the noise still carves
-  separate clouds; 1 paints toward an overcast deck. Can also set the cloud type.
-- **Clear:** removes coverage.
+Brushes (keys 1 to 6; V returns to Shapes):
+
+- **Cloud:** adds cloud up to **Max coverage**. Low values give small, scattered
+  cumulus, and 1 gives the biggest, tallest ones. Can also set the cloud type.
+- **Clear:** removes cloud, and holds off the global coverage, so it clears even under
+  an overcast look.
 - **Type:** pushes clouds toward stratus or towers.
 - **Density:** thickens, or thins.
 - **Scatter:** sprays small separate clouds.
