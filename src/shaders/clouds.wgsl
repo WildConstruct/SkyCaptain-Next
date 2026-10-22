@@ -1,4 +1,4 @@
-// Nubis-style 2.5D cloud layer, raymarched from a fixed eye straight into an environment cube.
+// 2.5D cloud layer (Takram three-geospatial's model on our authored weather), raymarched from a fixed eye straight into an environment cube.
 // Each dispatch thread owns one 4x4 texel block and renders one texel of it per frame in
 // Bayer order, so a full cube refresh takes 16 frames. Early frames fill not-yet-rendered
 // texels so edits appear immediately at quarter, then half resolution. Later frames keep
@@ -26,71 +26,119 @@ fn ground_radius() -> f32 { return params.layer.z; }
 fn cloud_bottom() -> f32 { return params.layer.x; }
 // Top of the march shell: the tallest tower possible.
 fn cloud_top() -> f32 { return params.layer.y; }
-// Height of ordinary cumulus; light-march and occlusion distances scale with it.
+// Height of ordinary cumulus.
 fn cumulus_height() -> f32 { return params.scale.w; }
 
-const MAX_MARCH_KM: f32 = 40.0;
+// The density model and lighting below are ported from Takram three-geospatial clouds
+// (MIT, (c) 2024 Shota Matsuda): clouds.glsl sampleWeather/sampleMedia and clouds.frag
+// marchClouds, converted from metres to kilometres. Constants keep Takram's defaults and
+// names. Where we differ (our authored weather map, per-type cloud height, a cone march
+// in place of their beer shadow map, the sky cube in place of precomputed irradiance)
+// it is marked "skyCaptain:". docs/takram-port.md lists every difference.
+const COVERAGE_FILTER_WIDTH: f32 = 0.6;
+const SHAPE_ALTERING_BIAS: f32 = 0.35;
+const WEATHER_EXPONENT: f32 = 1.0;
+const SHAPE_AMOUNT: f32 = 1.0;
+// DensityProfile(expTerm 0, exponent 0, linearTerm 0.75, constantTerm 0.25).
+const PROFILE_LINEAR: f32 = 0.75;
+const PROFILE_CONSTANT: f32 = 0.25;
+const TURBULENCE_PERIOD_KM: f32 = 5.0;
+const TURBULENCE_DISPLACEMENT_KM: f32 = 0.35;
+// Primary march (qualityPresets 'high'): metres -> km.
+const MIN_STEP_KM: f32 = 0.05;
+const MAX_STEP_KM: f32 = 1.0;
+const MAX_RAY_KM: f32 = 200.0;
+const PERSPECTIVE_STEP_SCALE: f32 = 1.01;
+const MIN_DENSITY: f32 = 1e-5;
+const MIN_EXTINCTION: f32 = 1e-2; // 1e-5 per metre
+const MIN_TRANSMITTANCE: f32 = 1e-2;
+// Secondary marches toward the sun and the ground.
+const ITERATIONS_TO_SUN: i32 = 2;
+const ITERATIONS_TO_GROUND: i32 = 3;
+const MIN_SECONDARY_STEP_KM: f32 = 0.1;
+const SECONDARY_STEP_SCALE: f32 = 2.0;
+// Lighting.
+const GROUND_BOUNCE_SCALE: f32 = 1.0;
+const POWDER_EXPONENT_KM: f32 = 0.15; // 150 per metre of extinction
+// skyCaptain: rayDistance * 1e-5 per metre in Takram's mip estimate.
+const MIP_PER_KM: f32 = 0.01;
+const RECIPROCAL_PI4: f32 = 0.0795774715459;
 
-// Each cloud type has its own height: stratus 0.35 km, cumulus the layer height, towers up
-// to the top of the shell.
+fn remap_clamped(x: f32, a: f32, b: f32) -> f32 {
+  return clamp((x - a) / (b - a), 0.0, 1.0);
+}
+
+// skyCaptain: each cloud type has its own layer height: stratus 0.35 km, cumulus the
+// layer height, towers up to the top of the shell. Takram uses fixed layers instead.
 fn cloud_height(kind: f32) -> f32 {
   if (kind < 0.5) { return mix(0.35, cumulus_height(), kind * 2.0); }
   return mix(cumulus_height(), cloud_top() - cloud_bottom(), (kind - 0.5) * 2.0);
 }
 
-// Vertical profile within a cloud's own height (h = 0 base .. 1 top).
-fn height_profile(h: f32, kind: f32) -> f32 {
-  let bottom_ramp = clamp(remap(h, 0.0, 0.07, 0.0, 1.0), 0.0, 1.0);
-  let top_ramp = clamp(remap(h, 0.6, 1.0, 1.0, 0.0), 0.0, 1.0);
-  // Towers carry more density higher up (anvil); stratus stays bottom-weighted.
-  let gradient = mix(1.0 - h * 0.6, 0.7 + h * 0.3, kind);
-  return bottom_ramp * top_ramp * gradient;
+fn shape_altering(hf: f32, kind: f32) -> f32 {
+  // Semi-circle that rounds clouds toward the top.
+  // skyCaptain: towers raise the bias toward 1 so the widest point climbs to mid-height
+  // and they stand as columns; Takram's 0.35 (widest near the base) suits cumulus.
+  let bias = mix(SHAPE_ALTERING_BIAS, 0.9, clamp((kind - 0.5) * 2.0, 0.0, 1.0));
+  let x = clamp(pow(hf, bias) * 2.0 - 1.0, -1.0, 1.0);
+  return 1.0 - x * x;
 }
 
-struct Sample {
+struct Weather {
   density: f32,
-  h: f32,
+  hf: f32,     // height fraction within the cloud's own layer
+  scale: f32,  // skyCaptain: authored density multiplier (weather map b)
 }
 
-fn cloud_density(p: vec3f, with_detail: bool) -> Sample {
-  var s: Sample;
-  s.density = 0.0;
-  let altitude = length(p) - ground_radius();
-  if (altitude <= cloud_bottom() || altitude >= cloud_top()) { return s; }
+fn sample_weather(p: vec3f, altitude: f32) -> Weather {
+  var w: Weather;
+  w.density = 0.0;
+  w.hf = 0.0;
+  w.scale = 0.0;
+  if (altitude <= cloud_bottom() || altitude >= cloud_top()) { return w; }
+  // skyCaptain: the local weather is our authored map (background, shapes, paint).
+  let tex = textureSampleLevel(weather_tex, clamp_sampler, (p.xz + params.wind.xy) / params.scale.z + 0.5, 0.0);
+  let kind = clamp(tex.g + params.cloud.y, 0.0, 1.0);
+  w.hf = (altitude - cloud_bottom()) / cloud_height(kind);
+  if (w.hf >= 1.0) { return w; }
+  let local_weather = pow(tex.r, WEATHER_EXPONENT);
+  // skyCaptain: Takram's coverage is one global number, and below ~0.6 it erodes everything
+  // above a low dome, so a painted storm would never stand up. What the artist authored
+  // raises coverage locally; where nothing is authored the global coverage rules as upstream.
+  let coverage = max(params.cloud.x, local_weather);
+  let factor = 1.0 - coverage * shape_altering(w.hf, kind);
+  w.density = remap_clamped(mix(local_weather, 1.0, COVERAGE_FILTER_WIDTH), factor, factor + COVERAGE_FILTER_WIDTH);
+  w.scale = tex.b;
+  return w;
+}
 
-  let weather = textureSampleLevel(weather_tex, clamp_sampler, (p.xz + params.wind.xy) / params.scale.z + 0.5, 0.0);
-  let coverage = clamp(weather.r + params.cloud.x * 2.0 - 1.0, 0.0, 1.0);
-  if (coverage <= 0.0) { return s; }
-  let kind = clamp(weather.g + params.cloud.y, 0.0, 1.0);
-  // Height scales with local coverage (Schneider 2017): cloud edges are shorter than their
-  // centres, so coverage blobs become domes instead of extruded slabs with flat tops.
-  let h = (altitude - cloud_bottom()) / (cloud_height(kind) * mix(0.3, 1.0, coverage));
-  s.h = h;
-  if (h >= 1.0) { return s; }
+struct Media {
+  extinction: f32, // per km; scattering equals extinction (albedo 1, as upstream)
+}
 
-  let local = vec3f(p.x + params.wind.x, altitude, p.z + params.wind.y);
-  let shape = textureSampleLevel(shape_tex, repeat_sampler, local / params.scale.x, 0.0);
-  let low_fbm = dot(shape.gba, vec3f(0.625, 0.25, 0.125));
-  // Low-frequency Worley dilates the Perlin-Worley into billows. Damped so the result spans
-  // roughly 0.15..0.95 (median ~0.55) and coverage still has something to carve.
-  var base = clamp(remap(shape.r, (low_fbm - 1.0) * 0.35, 1.0, 0.0, 1.0), 0.0, 1.0);
-  base *= height_profile(h, kind);
-  // Coverage shrinks with height so tops round off; towers narrow more as they rise.
-  let tower = clamp((kind - 0.5) * 2.0, 0.0, 1.0);
-  let cov_h = coverage * (1.0 - smoothstep(0.35, 1.0, h) * mix(0.3, 0.45, tower));
-  base = clamp(remap(base, 1.0 - cov_h, 1.0, 0.0, 1.0), 0.0, 1.0) * cov_h;
-  if (base <= 0.0) { return s; }
+fn sample_media(w: Weather, p: vec3f, altitude: f32, mip: f32, jitter: f32) -> Media {
+  var density = w.density;
+  // Curl-noise turbulence, strongest at the cloud base.
+  let turbulence_uv = (p.xz + params.wind.xy) / TURBULENCE_PERIOD_KM;
+  let turbulence = TURBULENCE_DISPLACEMENT_KM
+    * (textureSampleLevel(shape_tex, repeat_sampler, vec3f(turbulence_uv, 0.5), 0.0).gba * 2.0 - 1.0)
+    * density * remap_clamped(w.hf, 0.3, 0.0);
+  let local = vec3f(p.x + params.wind.x, altitude, p.z + params.wind.y) + turbulence;
+  let shape = textureSampleLevel(shape_tex, repeat_sampler, local / params.scale.x, 0.0).r;
+  density = remap_clamped(density, (1.0 - shape) * SHAPE_AMOUNT, 1.0);
 
-  if (with_detail) {
-    let dp = vec3f(p.x + params.wind.z, altitude, p.z + params.wind.w) / params.scale.y;
-    let detail = textureSampleLevel(detail_tex, repeat_sampler, dp, 0.0).rgb;
-    let high_fbm = dot(detail, vec3f(0.625, 0.25, 0.125));
-    // Wispy erosion at the base, billowy erosion toward the tops.
-    let modifier = mix(high_fbm, 1.0 - high_fbm, clamp(h * 5.0, 0.0, 1.0));
-    base = clamp(remap(base, modifier * params.cloud.w, 1.0, 0.0, 1.0), 0.0, 1.0);
+  if (mip * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
+    let dp = (vec3f(p.x + params.wind.z, altitude, p.z + params.wind.w) + turbulence) / params.scale.y;
+    let detail = textureSampleLevel(detail_tex, repeat_sampler, dp, 0.0).r;
+    // Fluffy at the top and whippy at the bottom.
+    let modifier = mix(pow(detail, 6.0), 1.0 - detail, remap_clamped(w.hf, 0.2, 0.4)) * params.cloud.w;
+    density = remap_clamped(density * 2.0, modifier * 0.5, 1.0);
   }
-  s.density = base * weather.b;
-  return s;
+  // Density profile, then Takram's saturate() at 1 per metre (1000 per km).
+  let profile = PROFILE_LINEAR * w.hf + PROFILE_CONSTANT;
+  var m: Media;
+  m.extinction = min(density * params.cloud.z * w.scale * profile, 1000.0);
+  return m;
 }
 
 fn sun_transmittance(p: vec3f) -> vec3f {
@@ -100,27 +148,75 @@ fn sun_transmittance(p: vec3f) -> vec3f {
   return textureSampleLevel(transmittance_lut, clamp_sampler, uv, 0.0).rgb;
 }
 
-fn phase(cos_theta: f32, scale: f32) -> f32 {
-  let forward = henyey_greenstein(cos_theta, params.light.y * scale);
-  let back = henyey_greenstein(cos_theta, -params.light.z * scale);
+fn phase(cos_theta: f32, attenuation: f32) -> f32 {
+  let forward = henyey_greenstein(cos_theta, params.light.y * attenuation);
+  let back = henyey_greenstein(cos_theta, -params.light.z * attenuation);
   return mix(forward, back, params.light.w);
 }
 
-// Optical depth toward the sun along a short cone, with growing step lengths.
-fn light_optical_depth(p: vec3f, jitter: vec3f) -> f32 {
+struct Depth {
+  optical_depth: f32,
+  distance: f32,
+}
+
+fn media_at(p: vec3f, mip: f32, jitter: f32) -> f32 {
+  let altitude = length(p) - ground_radius();
+  let w = sample_weather(p, altitude);
+  if (w.density <= MIN_DENSITY) { return 0.0; }
+  return sample_media(w, p, altitude, mip, jitter).extinction;
+}
+
+// marchOpticalDepth: a few short, doubling steps.
+fn march_optical_depth(origin: vec3f, dir: vec3f, max_iterations: i32, mip: f32, jitter: f32) -> Depth {
+  var r: Depth;
+  r.optical_depth = 0.0;
+  r.distance = 0.0;
+  let iterations = i32(max(0.0, remap(mip, 0.0, 1.0, f32(max_iterations + 1), 1.0) - jitter));
+  if (iterations == 0) {
+    r.optical_depth = 0.5; // Upstream's fudge for the mean optical depth.
+    return r;
+  }
+  var step_size = MIN_SECONDARY_STEP_KM / f32(iterations);
+  var next = step_size * jitter;
+  for (var i = 0; i < iterations; i++) {
+    r.distance = next;
+    r.optical_depth += media_at(origin + dir * next, mip, jitter) * step_size;
+    next += step_size;
+    step_size *= SECONDARY_STEP_SCALE;
+  }
+  return r;
+}
+
+// skyCaptain: Takram adds the optical depth beyond the short march from a beer shadow
+// map. We have no shadow map yet, so march on toward the sun with growing steps and
+// coarse density (no detail) for params.march.y steps.
+fn far_optical_depth(origin: vec3f, start: f32, jitter: f32) -> f32 {
   let sun = params.sun_dir.xyz;
   let steps = i32(params.march.y);
-  var ds = cumulus_height() * 0.04;
-  var travelled = 0.0;
+  var ds = max(MIN_SECONDARY_STEP_KM * 1.5, start);
+  var t = start + ds * jitter;
   var depth = 0.0;
   for (var i = 0; i < steps; i++) {
-    let cone = (jitter * 2.0 - 1.0) * travelled * 0.15;
-    let q = p + (sun * (travelled + ds * 0.5) + cone);
-    depth += cloud_density(q, i < 2).density * ds;
-    travelled += ds;
-    ds *= 1.6;
+    let p = origin + sun * t;
+    if (length(p) - ground_radius() >= cloud_top()) { break; }
+    depth += media_at(p, 1.0, 1.0) * ds;
+    t += ds;
+    ds *= 1.8;
   }
-  return depth * params.cloud.z;
+  return depth;
+}
+
+fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
+  // a: scattering, b: extinction, c: phase attenuation (Wrenninge et al.)
+  var coeffs = vec3f(1.0);
+  let attenuation = params.ms.xyz;
+  var scattering = 0.0;
+  let octaves = min(i32(params.misc.w), 12);
+  for (var i = 0; i < octaves; i++) {
+    scattering += coeffs.x * exp(-optical_depth * coeffs.y) * phase(cos_theta, coeffs.z);
+    coeffs *= attenuation;
+  }
+  return scattering;
 }
 
 struct MarchResult {
@@ -135,80 +231,92 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   if (dir.y <= 0.0) { return result; }
 
   let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
-  let t0 = ray_sphere(origin, dir, ground_radius() + cloud_bottom()).y;
-  let t_top = ray_sphere(origin, dir, ground_radius() + cloud_top()).y;
-  let t1 = min(t_top, t0 + MAX_MARCH_KM);
-  // Step length is set by the cumulus layer, so ordinary clouds get the full step budget;
-  // the march continues at the same spacing through the tower region above.
-  let t_cumulus = min(ray_sphere(origin, dir, ground_radius() + cloud_bottom() + cumulus_height()).y, t1);
-  if (t0 <= 0.0 || t1 <= t0) { return result; }
+  let t_near = ray_sphere(origin, dir, ground_radius() + cloud_bottom()).y;
+  let t_far = min(ray_sphere(origin, dir, ground_radius() + cloud_top()).y, MAX_RAY_KM);
+  if (t_near <= 0.0 || t_far <= t_near) { return result; }
 
   let sun = params.sun_dir.xyz;
   let cos_theta = dot(dir, sun);
   let illum = params.sun_color.rgb * params.sun_dir.w;
-  let sigma_scale = params.cloud.z;
-  let albedo = 0.98;
+  let coverage = params.cloud.x;
 
-  // Ambient from the sky cube: zenith for tops, horizon ring for bases, plus a ground bounce.
+  // skyCaptain: sky light from the sky cube instead of precomputed irradiance. Mean
+  // radiance over the upper hemisphere, and over the whole sphere (the lower half seen
+  // from inside the layer is mostly ground, which the bounce term adds separately).
   let sky_top = textureSampleLevel(sky_tex, clamp_sampler, vec3f(0.0, 1.0, 0.0), 0.0).rgb;
   let sky_side = (textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(1.0, 0.25, 0.0)), 0.0).rgb
                 + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(-1.0, 0.25, 0.0)), 0.0).rgb
                 + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(0.0, 0.25, 1.0)), 0.0).rgb
                 + textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(0.0, 0.25, -1.0)), 0.0).rgb) * 0.25;
-  let ground_bounce = illum * sun_transmittance(origin) * max(sun.y, 0.0) * params.misc.y / PI;
+  let sky_hemisphere = sky_top * 0.25 + sky_side * 0.75;
+  // skyIrradiance / 4pi in Takram's terms.
+  let sky_light = sky_hemisphere * 0.5;
+  // Ground irradiance: horizontal sky irradiance plus the sun through the clear fraction.
+  let ground_sky_irradiance = PI * (sky_top * 0.5 + sky_side * 0.5);
+  let ground_sun_irradiance = illum * sun_transmittance(origin) * max(sun.y, 0.0);
+  let ground_radiance = params.misc.y / PI * (ground_sky_irradiance + (1.0 - coverage) * ground_sun_irradiance);
 
-  let max_steps = i32(params.march.x);
-  let dt = max(t_cumulus - t0, 1e-3) / f32(max_steps);
-  let jitter = hash33(seed);
-  var t = t0 + dt * jitter.x;
-  var transmittance = 1.0;
-  var scatter = vec3f(0.0);
-  var first_hit = -1.0;
-  var octave_phase = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
-  let octaves = min(i32(params.misc.w), 4);
-  for (var k = 0; k < 4; k++) {
-    octave_phase[k] = phase(cos_theta, pow(params.ms.z, f32(k)));
-  }
+  let max_iterations = i32(params.march.x);
+  let jitter = hash33(seed).x;
+  var step_size = MIN_STEP_KM + (PERSPECTIVE_STEP_SCALE - 1.0) * t_near;
+  var d = step_size * jitter * 2.0;
+  let max_d = t_far - t_near;
+  var radiance_integral = vec3f(0.0);
+  var transmittance_integral = 1.0;
+  var weighted_distance_sum = 0.0;
+  var transmittance_sum = 0.0;
 
-  for (var i = 0; i < max_steps * 3; i++) {
-    if (t >= t1 || transmittance < 0.01) { break; }
+  for (var i = 0; i < max_iterations; i++) {
+    if (d > max_d) { break; }
+    let t = t_near + d;
     let p = origin + dir * t;
-    let coarse = cloud_density(p, false);
-    if (coarse.density <= 0.0) {
-      t += dt * 2.0;
+    let altitude = length(p) - ground_radius();
+    let mip = log2(max(1.0, 1.0 + t * MIP_PER_KM));
+    let w = sample_weather(p, altitude);
+    if (w.density <= MIN_DENSITY) {
+      // Step longer in empty space.
+      step_size *= PERSPECTIVE_STEP_SCALE;
+      d += mix(step_size, MAX_STEP_KM, min(1.0, mip));
       continue;
     }
-    let s = cloud_density(p, true);
-    if (s.density > 0.0) {
-      if (first_hit < 0.0) { first_hit = t; }
-      let sigma_t = s.density * sigma_scale;
-      let sigma_s = sigma_t * albedo;
-      let tau_light = light_optical_depth(p, hash33(seed + vec3u(u32(i) * 7919u, 0u, 0u)));
-      // Wrenninge multiple-scattering octaves: scatter a^k, extinction b^k, eccentricity c^k.
-      var sun_scatter = 0.0;
-      for (var k = 0; k < octaves; k++) {
-        let fk = f32(k);
-        sun_scatter += pow(params.ms.x, fk) * exp(-tau_light * pow(params.ms.y, fk)) * octave_phase[k];
+    let media = sample_media(w, p, altitude, mip, jitter);
+    if (media.extinction > MIN_EXTINCTION) {
+      let sun_irradiance = illum * sun_transmittance(p);
+      let surface_normal = normalize(p);
+      let to_sun = march_optical_depth(p, sun, ITERATIONS_TO_SUN, mip, jitter);
+      let optical_depth = to_sun.optical_depth + far_optical_depth(p, to_sun.distance, hash33(seed + vec3u(u32(i), 31u, 0u)).x);
+      var radiance = sun_irradiance * approximate_multiple_scattering(optical_depth, cos_theta);
+      if (mip < 0.5) {
+        let to_ground = march_optical_depth(p, -surface_normal, ITERATIONS_TO_GROUND, mip, jitter);
+        radiance += ground_radiance * exp(-to_ground.optical_depth) * RECIPROCAL_PI4 * GROUND_BOUNCE_SCALE;
       }
-      let powder = mix(1.0, 1.0 - exp(-sigma_t * 0.2), params.ms.w);
-      // Ambient is occluded by the cloud above: one cheap upward sample gives dark cores, bright tops.
-      let above = cloud_density(p + normalize(p) * cumulus_height() * 0.15, false).density;
-      let occlusion = exp(-(above + s.density) * sigma_scale * cumulus_height() * 0.15);
-      let ambient = mix(sky_side * 0.6 + ground_bounce, sky_top * 0.7 + sky_side * 0.3, s.h) * params.light.x * mix(0.15, 1.0, occlusion);
-      let in_scatter = sigma_s * (illum * sun_transmittance(p) * sun_scatter * powder + ambient);
-      let step_t = exp(-sigma_t * dt);
-      // Hillaire energy-conserving integration over the step.
-      scatter += transmittance * (in_scatter - in_scatter * step_t) / max(sigma_t, 1e-5);
-      transmittance *= step_t;
+      // Crude approximation of the sky gradient. Better than none in the shadows.
+      radiance += sky_light * (w.hf * 0.5 + 0.5) * params.light.x;
+      radiance *= media.extinction;
+      radiance *= 1.0 - params.ms.w * exp(-media.extinction * POWDER_EXPONENT_KM);
+
+      // Energy-conserving analytical integration (Frostbite 2016, 5.6.3).
+      let transmittance = exp(-media.extinction * step_size);
+      let clamped = max(media.extinction, 1e-4);
+      radiance_integral += transmittance_integral * (radiance - radiance * transmittance) / clamped;
+      transmittance_integral *= transmittance;
+      weighted_distance_sum += t * transmittance_integral;
+      transmittance_sum += transmittance_integral;
     }
-    t += dt;
+    if (transmittance_integral <= MIN_TRANSMITTANCE) { break; }
+    // Take a shorter step because we've already hit the clouds.
+    step_size *= PERSPECTIVE_STEP_SCALE;
+    d += step_size;
   }
 
-  if (first_hit < 0.0) { return result; }
-  // Aerial perspective: distant clouds fade into the sky behind them.
-  let fade = exp(-first_hit / (params.misc.x * 3.0));
-  result.scatter = scatter * fade;
-  result.transmittance = mix(1.0, transmittance, fade);
+  if (transmittance_sum <= 0.0) { return result; }
+  // skyCaptain: Takram evaluates full aerial perspective at the transmittance-weighted
+  // front depth (Frostbite 5.9.1). We fade toward the sky behind with the haze distance.
+  let front_depth = weighted_distance_sum / transmittance_sum;
+  let fade = exp(-front_depth / (params.misc.x * 3.0));
+  let alpha = remap_clamped(transmittance_integral, 1.0, MIN_TRANSMITTANCE);
+  result.scatter = radiance_integral * fade;
+  result.transmittance = 1.0 - alpha * fade;
   return result;
 }
 

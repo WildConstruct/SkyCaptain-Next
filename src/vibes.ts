@@ -13,31 +13,31 @@ export const VIBES: Vibe[] = [
   {
     name: 'Bright midday',
     hint: 'High sun, crisp air, white cumulus',
-    settings: { sunElevation: 62, sunIntensity: 22, haze: 70, ambient: 1, forwardG: 0.8, powder: 0.2, density: 30, typeBias: 0 },
+    settings: { sunElevation: 62, sunIntensity: 22, haze: 70, ambient: 1, forwardG: 0.7, powder: 0.8, density: 200, typeBias: 0 },
   },
   {
     name: 'Golden hour',
     hint: 'Low warm sun, long glowing edges',
-    settings: { sunElevation: 6, sunIntensity: 24, haze: 25, ambient: 0.9, forwardG: 0.85, powder: 0.3, density: 32 },
+    settings: { sunElevation: 6, sunIntensity: 24, haze: 25, ambient: 0.9, forwardG: 0.8, powder: 0.8, density: 200 },
   },
   {
     name: 'Last light',
     hint: 'Sun on the horizon, deep colour, dark undersides',
-    settings: { sunElevation: 1.2, sunIntensity: 26, haze: 18, ambient: 0.7, forwardG: 0.88, powder: 0.35, density: 36 },
+    settings: { sunElevation: 1.2, sunIntensity: 26, haze: 18, ambient: 0.7, forwardG: 0.88, powder: 0.9, density: 240 },
   },
   {
     name: 'Hazy summer',
     hint: 'Milky sky, soft contrast',
-    settings: { sunElevation: 38, sunIntensity: 18, haze: 9, ambient: 1.3, forwardG: 0.7, powder: 0.1, density: 22, erosion: 0.3 },
+    settings: { sunElevation: 38, sunIntensity: 18, haze: 9, ambient: 1.3, forwardG: 0.65, powder: 0.4, density: 150, erosion: 0.75 },
   },
   {
     name: 'Brooding',
     hint: 'Heavy, dense, dark-bellied clouds under a lower sun',
-    settings: { sunElevation: 14, sunIntensity: 16, haze: 22, ambient: 0.55, forwardG: 0.75, powder: 0.45, density: 60, coverage: 0.62, typeBias: 0.15 },
+    settings: { sunElevation: 14, sunIntensity: 16, haze: 22, ambient: 0.55, forwardG: 0.75, powder: 1, density: 400, coverage: 0.45, typeBias: 0.15 },
   },
   {
     name: 'Overcast softbox',
     hint: 'Full thin cover: even, soft light for product work',
-    settings: { sunElevation: 45, sunIntensity: 14, haze: 30, ambient: 1.1, forwardG: 0.6, powder: 0, density: 18, coverage: 0.92, typeBias: -0.6, erosion: 0.2 },
+    settings: { sunElevation: 45, sunIntensity: 14, haze: 30, ambient: 1.1, forwardG: 0.6, powder: 0.3, density: 120, coverage: 0.75, typeBias: -0.6, erosion: 0.5 },
   },
 ];

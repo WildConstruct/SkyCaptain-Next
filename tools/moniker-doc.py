@@ -14,12 +14,12 @@ out = ["# skyCaptain Moniker vocabulary", "",
        "trimmed words are promoted back in before a number is added.", ""]
 families = {
     'time': 'sun elevation: below 0° twilight, below 8° golden, below 22° low, below 55° day, else high',
-    'mood': 'brooding = density ≥ 40 and ambient ≤ 0.75; soft = ambient ≥ 1.25 and powder ≤ 0.15; luminous = silver lining ≥ 0.86 and density < 40',
+    'mood': 'brooding = density ≥ 270 and ambient ≤ 0.75; soft = ambient ≥ 1.25 and powder ≤ 0.5; luminous = silver lining ≥ 0.86 and density < 270',
     'windKm': 'drift distance, √(driftX² + driftZ²) km',
     'scene': 'visible shapes at strength ≥ 0.3: front + storm = squall; 2+ storms = storms; 1 storm; front; clear hole = clearing; haze sheet; cumulus field; else painted if any paint, else open',
 }
 for name, title, use in [('look', 'Look presets', 'Names looks (.wcx) in the Looks panel.'),
-                         ('sky', 'Whole skies', 'Names .sky.json files and HDRI exports.')]:
+                         ('sky', 'Whole skies', 'Names sky .wcx files and HDRI exports.')]:
     d = json.load(open(f'src/moniker/skycaptain-{name}.moniker'))
     out += [f"## {title}: `{d['id']}@{d['version']}`", "", use, "",
             f"Noun: **{d['noun'] or '(from the scene slot)'}**. Max tokens: {d['max_tokens']}. "

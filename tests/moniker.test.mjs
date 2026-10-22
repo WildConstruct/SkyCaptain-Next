@@ -20,7 +20,7 @@ const sky = read('src/moniker/skycaptain-sky.moniker');
 
 // Slider ranges (src/main.ts) for every continuous parameter a vocabulary reads.
 const RANGES = {
-  windKm: [0, Math.hypot(40, 40)], erosion: [0, 1], density: [2, 120], haze: [5, 120],
+  windKm: [0, Math.hypot(40, 40)], erosion: [0, 2], density: [10, 1000], haze: [5, 120],
   sunIntensity: [1, 100], coverage: [0, 1], typeBias: [-1, 1],
 };
 const FAMILIES = {
@@ -77,10 +77,10 @@ for (const [name, vocab, state] of [
 
 test('families cover their inputs', () => {
   assert.deepEqual([-3, 2, 15, 40, 70].map(timeFamily), ['twilight', 'golden', 'low', 'day', 'high']);
-  assert.equal(moodFamily(60, 0.6, 0.3, 0.8), 'brooding');
-  assert.equal(moodFamily(20, 1.4, 0.1, 0.7), 'soft');
-  assert.equal(moodFamily(30, 0.9, 0.3, 0.9), 'luminous');
-  assert.equal(moodFamily(30, 1, 0.25, 0.8), 'none');
+  assert.equal(moodFamily(400, 0.6, 0.8, 0.8), 'brooding');
+  assert.equal(moodFamily(150, 1.4, 0.4, 0.7), 'soft');
+  assert.equal(moodFamily(200, 0.9, 0.8, 0.9), 'luminous');
+  assert.equal(moodFamily(200, 1, 0.8, 0.7), 'none');
   assert.ok(DERIVED_STATE.every((k) => k in lookMonikerState(DEFAULTS) || k in skyMonikerState(DEFAULTS, [], false)));
 });
 
@@ -103,11 +103,11 @@ test('factory looks get their reviewed names', () => {
 
 test('recognisable looks get their own noun', () => {
   const name = (s) => describeLook({ ...DEFAULTS, ...s }, look).fallback;
-  assert.equal(name({ sunElevation: -2, coverage: 0.2 }), 'Afterglow');
-  assert.equal(name({ typeBias: 0.7, density: 60 }), 'Thunderheads');
-  assert.equal(name({ haze: 8, coverage: 0.2 }), 'Haze');
-  assert.equal(name({ coverage: 0.85, ambient: 0.6, density: 50 }), 'Brooding Dense Overcast');
-  assert.equal(name({ sunElevation: 70, haze: 90, coverage: 0.2 }), 'Clear Midday Sky');
+  assert.equal(name({ sunElevation: -2, coverage: 0.1 }), 'Afterglow');
+  assert.equal(name({ typeBias: 0.7, density: 400 }), 'Thunderheads');
+  assert.equal(name({ haze: 8, coverage: 0.1 }), 'Haze');
+  assert.equal(name({ coverage: 0.7, ambient: 0.6, density: 350 }), 'Brooding Dense Overcast');
+  assert.equal(name({ sunElevation: 70, haze: 90, coverage: 0.1 }), 'Clear Midday Sky');
 });
 
 test('whole skies are named for the weather composed in them', () => {
@@ -136,7 +136,7 @@ test('a Save suggestion is unique among existing names; the fallback ignores the
 
 test('naming is deterministic and reads only through the vendored engine', () => {
   for (let i = 0; i < 50; i++) {
-    const s = { ...DEFAULTS, sunElevation: -4 + i * 1.9, haze: 5 + i * 2.3, coverage: (i * 37 % 100) / 100, density: 2 + i * 2.3 };
+    const s = { ...DEFAULTS, sunElevation: -4 + i * 1.9, haze: 5 + i * 2.3, coverage: (i * 37 % 100) / 100, density: 10 + i * 19 };
     assert.equal(describeLook(s, look).fallback, generateName(lookMonikerState(s), look));
   }
   assert.equal(slotToken(look.slots.cover, 1), 'Overcast');

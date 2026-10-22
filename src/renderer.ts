@@ -256,7 +256,7 @@ export class Renderer {
     const d = this.device;
     const height = width / 2;
     const face = Math.min(2048, Math.max(256, Math.round(width / 4 / 4) * 4));
-    const quality: Quality = { label: 'export', faceSize: face, viewSteps: 128, lightSteps: 6, samples };
+    const quality: Quality = { label: 'export', faceSize: face, viewSteps: 500, lightSteps: 6, samples };
     this.exporting = true;
     const params = d.createBuffer({ size: 160, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const accum = d.createBuffer({ size: 6 * face * face * 8, usage: GPUBufferUsage.STORAGE });

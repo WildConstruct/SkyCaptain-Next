@@ -1,7 +1,7 @@
 {
   "plugin": "skyCaptain Sky",
   "id": "skycaptain-sky",
-  "version": "1.0",
+  "version": "2.0",
   "locale": "en-US",
   "noun": null,
   "max_tokens": 3,
@@ -107,34 +107,34 @@
         {
           "range": [
             0,
-            0.28
+            0.15
           ],
           "token": "Clear"
         },
         {
           "range": [
-            0.28,
-            0.46
+            0.15,
+            0.3
           ],
           "token": "Fair"
         },
         {
           "range": [
-            0.46,
-            0.62
+            0.3,
+            0.42
           ],
           "token": null
         },
         {
           "range": [
-            0.62,
-            0.8
+            0.42,
+            0.6
           ],
           "token": "Broken"
         },
         {
           "range": [
-            0.8,
+            0.6,
             1
           ],
           "token": "Overcast"

@@ -25,7 +25,7 @@ assert.equal(await setting('sunElevation'), 6);
 await page.getByRole('button', { name: 'Save look…' }).click();
 const nameInput = page.locator('.save-look input[type=text]');
 assert.equal(await nameInput.inputValue(), 'Golden-Hour Sky');
-await page.evaluate(() => { const s = window.skyGraph['settings']; s.haze = 15; s.density = 55; s.ambient = 0.6; });
+await page.evaluate(() => { const s = window.skyGraph['settings']; s.haze = 15; s.density = 370; s.ambient = 0.6; });
 await page.locator('.save-look button[title^="Suggest"]').click();
 const suggested = await nameInput.inputValue();
 // Three tokens at most (two adjectives and the noun): Hazy fires but is trimmed.
@@ -39,10 +39,11 @@ const wcx = JSON.parse(readFileSync(wcxPath, 'utf8'));
 assert.equal(wcx._format, 'wcx');
 assert.equal(wcx._plugin, 'skycaptain');
 assert.equal(wcx.kind, 'look');
-assert.equal(wcx.moniker.vocabulary, 'skycaptain-look@1.0');
+assert.equal(wcx.moniker.vocabulary, 'skycaptain-look@2.0');
 assert.equal(wcx.moniker.fallback, 'Brooding Golden-Hour Sky');
 assert.ok(wcx.moniker.tokens.includes('Hazy'), 'trimmed tokens are still recorded');
 assert.ok(wcx.params.some((p) => p.id === 'haze' && p.value === 15));
+assert.ok(wcx.params.every((p) => /^[0-9a-f-]{36}$/.test(p.uuid)), 'every param has a stable uuid');
 assert.ok(!wcx.params.some((p) => ['ev', 'yaw', 'seed'].includes(p.id)), 'view and composition are not part of a look');
 console.log('wcx:', wcx.name, wcx.moniker.tokens.join(' / '));
 
@@ -55,7 +56,7 @@ await page.locator('.looks button', { hasText: 'Bright midday' }).click();
 assert.equal(await setting('haze'), 70);
 await chip.click();
 assert.equal(await setting('haze'), 15);
-assert.equal(await setting('density'), 55);
+assert.equal(await setting('density'), 370);
 console.log('saved look persists across reload and re-applies');
 
 // A second save of the same look gets a distinct suggestion.
@@ -83,11 +84,19 @@ await page.evaluate(() => {
   st.add({ id: 's', kind: 'storm_cell', x: 0, z: 30, size: 6, aspect: 1, rotation: 0, strength: 1, type: null, seed: 2, visible: true });
 });
 const [skyDownload] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save sky' }).click()]);
-assert.equal(skyDownload.suggestedFilename(), 'Brooding Golden-Hour Squall Line.sky.json');
-await skyDownload.saveAs('shots/looks/sky.sky.json');
-const doc = JSON.parse(readFileSync('shots/looks/sky.sky.json', 'utf8'));
-assert.equal(doc.name, skyDownload.suggestedFilename().replace('.sky.json', ''));
-assert.equal(doc.moniker.vocabulary, 'skycaptain-sky@1.0');
+assert.equal(skyDownload.suggestedFilename(), 'Brooding Golden-Hour Squall Line.wcx');
+await skyDownload.saveAs('shots/looks/sky.wcx');
+const doc = JSON.parse(readFileSync('shots/looks/sky.wcx', 'utf8'));
+assert.equal(doc.kind, 'sky');
+assert.equal(doc.name, 'Brooding Golden-Hour Squall Line');
+assert.equal(doc.moniker.vocabulary, 'skycaptain-sky@2.0');
+
+// A sky .wcx imports as a look: only its look settings, never its composition.
+await page.evaluate(() => { window.skyGraph['settings'].sunElevation = 50; });
+await page.locator('input[type=file][accept=".wcx"]').setInputFiles('shots/looks/sky.wcx');
+await page.waitForTimeout(200);
+assert.equal(await setting('sunElevation'), doc.params.find((p) => p.id === 'sunElevation').value, 'sky look applied');
+assert.equal(await page.evaluate(() => window.skyShapes.shapes.length), 2, 'shapes untouched by a look import');
 console.log('sky file:', skyDownload.suggestedFilename());
 
 await browser.close();

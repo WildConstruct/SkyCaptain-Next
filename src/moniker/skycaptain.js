@@ -20,9 +20,9 @@ export function timeFamily(sunElevation) {
 
 // The feel of the light on the clouds: heavy and dark, soft and even, or glowing edges.
 export function moodFamily(density, ambient, powder, forwardG) {
-  if (num(density, 30) >= 40 && num(ambient, 1) <= 0.75) return 'brooding';
-  if (num(ambient, 1) >= 1.25 && num(powder, 0.25) <= 0.15) return 'soft';
-  if (num(forwardG, 0.8) >= 0.86 && num(density, 30) < 40) return 'luminous';
+  if (num(density, 200) >= 270 && num(ambient, 1) <= 0.75) return 'brooding';
+  if (num(ambient, 1) >= 1.25 && num(powder, 0.8) <= 0.5) return 'soft';
+  if (num(forwardG, 0.7) >= 0.86 && num(density, 200) < 270) return 'luminous';
   return 'none';
 }
 
