@@ -90,3 +90,6 @@ progress { width: 100%; accent-color: var(--accent); }
 .fields { display: grid; grid-template-columns: 1fr 84px; gap: 4px 8px; align-items: center; margin: 6px 0; color: var(--muted); }
 .fields input[type=number] { width: 100%; box-sizing: border-box; background: #0f1216; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font: inherit; }
 .fields input[type=number]:disabled { opacity: 0.5; }
+.keys { margin: 6px 0; }
+.keys .key { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; align-items: center; padding: 2px 0; color: var(--muted); }
+.keys .key-time { padding: 1px 6px; font-size: 11px; font-variant-numeric: tabular-nums; }
