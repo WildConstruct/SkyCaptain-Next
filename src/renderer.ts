@@ -260,11 +260,12 @@ export class Renderer {
         { binding: 3, resource: this.skyCube.createView({ dimension: 'cube' }) },
         { binding: 4, resource: this.cloudCube.createView({ dimension: 'cube' }) },
         { binding: 5, resource: this.transmittanceLut.createView() },
+        { binding: 6, resource: { buffer: this.downwellingBuffer } },
       ],
     });
   }
 
-  private cloudBindGroupFor(params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture, pipeline = this.cloudPipeline, downwelling = this.downwellingBuffer): GPUBindGroup {
+  private cloudBindGroupFor(params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture, pipeline = this.cloudPipeline): GPUBindGroup {
     return this.device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
@@ -278,7 +279,6 @@ export class Renderer {
         { binding: 7, resource: this.skyCube.createView({ dimension: 'cube' }) },
         { binding: 8, resource: { buffer: accum } },
         { binding: 9, resource: cube.createView({ dimension: '2d-array' }) },
-        { binding: 10, resource: { buffer: downwelling } },
         { binding: 12, resource: this.shadowTex.createView() },
       ],
     });
@@ -332,13 +332,10 @@ export class Renderer {
       this.flushPending(prep);
       d.queue.submit([prep.finish()]);
 
-      // The export's ground light comes only from its own cube (nothing from the view), so a
-      // frame renders the same whatever the view shows. The ground skips the first pass (made
-      // before any light was integrated), so an export always renders at least two passes.
-      const bindGroup = this.cloudBindGroupFor(params, accum, cube, this.cloudPipeline, downwelling);
+      const bindGroup = this.cloudBindGroupFor(params, accum, cube);
       const downwellingGroup = this.downwellingBindGroupFor(cube, downwelling);
       const groups = Math.ceil(face / 4 / 8);
-      const total = 16 * Math.max(2, samples);
+      const total = 16 * samples;
       for (let frame = 0; frame < total; frame++) {
         d.queue.writeBuffer(params, 0, packParams(this.settings, frame, quality));
         const encoder = d.createCommandEncoder({ label: 'export clouds' });
@@ -347,7 +344,6 @@ export class Renderer {
         pass.setBindGroup(0, bindGroup);
         pass.dispatchWorkgroups(groups, groups, 6);
         pass.end();
-        this.integrateDownwelling(encoder, downwellingGroup);
         d.queue.submit([encoder.finish()]);
         // One frame in flight: keeps the browser responsive and each submission short.
         await d.queue.onSubmittedWorkDone();
@@ -355,6 +351,8 @@ export class Renderer {
       }
 
       const encoder = d.createCommandEncoder({ label: 'export composite' });
+      // The ground's sky and cloud light, from the finished export cube only.
+      this.integrateDownwelling(encoder, downwellingGroup);
       const pass = encoder.beginComputePass();
       pass.setPipeline(this.exportPipeline);
       pass.setBindGroup(0, d.createBindGroup({
@@ -366,6 +364,7 @@ export class Renderer {
           { binding: 3, resource: cube.createView({ dimension: '2d-array' }) },
           { binding: 4, resource: this.transmittanceLut.createView() },
           { binding: 5, resource: out.createView() },
+          { binding: 6, resource: { buffer: downwelling } },
         ],
       }));
       pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));

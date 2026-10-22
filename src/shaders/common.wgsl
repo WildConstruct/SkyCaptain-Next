@@ -61,3 +61,18 @@ fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
   let denom = max(1.0 + g2 - 2.0 * g * cos_theta, 1e-4);
   return (1.0 - g2) / (4.0 * PI * denom * sqrt(denom));
 }
+
+// The ground seen along dir from the eye (2 m up): transmittance-LUT uvs for the air between
+// the eye and the ground point, as the ratio of two upward rays (LUT: x = mu * 0.5 + 0.5,
+// y = height fraction). xy = at the ground point, zw = at the eye; x < 0 when dir misses
+// the ground. Radii are arguments because this prelude is shared by modules without params.
+fn ground_air_uvs(dir: vec3f, ground_r: f32, top_r: f32) -> vec4f {
+  let origin = vec3f(0.0, ground_r + 0.002, 0.0);
+  let t = ray_sphere(origin, dir, ground_r).x;
+  if (dir.y >= 0.0 || t <= 0.0) { return vec4f(-1.0); }
+  let up = -dir;
+  let g = origin + dir * t;
+  return vec4f(
+    dot(normalize(g), up) * 0.5 + 0.5, 0.0,
+    up.y * 0.5 + 0.5, clamp(0.002 / (top_r - ground_r), 0.0, 1.0));
+}

@@ -14,8 +14,6 @@
 @group(0) @binding(7) var sky_tex: texture_cube<f32>;
 @group(0) @binding(8) var<storage, read_write> accum: array<vec2u>;
 @group(0) @binding(9) var cloud_out: texture_storage_2d_array<rgba16float, write>;
-// Downwelling irradiance from the previous frame's environment (downwelling.wgsl).
-@group(0) @binding(10) var<storage, read> downwelling: vec4f;
 // Cloud shadow map over the ground around the eye: ground_shadow writes it, the ground reads it.
 @group(0) @binding(11) var shadow_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(12) var shadow_tex: texture_2d<f32>;
@@ -230,14 +228,14 @@ fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
 }
 
 // --- Ground ------------------------------------------------------------------------------
-// The ground is shaded here rather than in the sky pass because its light depends on the
-// clouds. Direct sun reaches each ground point through the cloud above it (cloud shadows,
-// soft from the jittered samples). Everything else comes from the environment as seen from
-// the ground: the sky through the clouds plus the light the clouds scatter, integrated
-// over the upper hemisphere after each frame (downwelling.wgsl). So overcast ground is lit
-// by the grey dome, and sunset ground glows with the cloud undersides. The result goes
-// into the cloud cube as radiance with transmittance 1, so the composite adds it on top of
-// the air in front of the ground (sky cube).
+// The ground's light depends on the clouds, so it is shaded here and in the composite
+// rather than in the sky pass. Here: direct sun through the cloud above each ground point
+// (the cloud shadow map). The composite (display.wgsl, export.wgsl) adds the rest: the
+// environment as seen from the ground, sky through the clouds plus the light the clouds
+// scatter, integrated from the finished cube (downwelling.wgsl). So overcast ground is lit
+// by the grey dome and sunset ground glows with the cloud undersides. The result goes into
+// the cloud cube as radiance with transmittance 1, on top of the air in front of the
+// ground (sky cube).
 
 // The eye is 2 m up, so the visible ground ends at the horizon about 5 km away: the shadow
 // map covers 12 km around the eye (512 texels, ~23 m each), marched once per change with
@@ -300,14 +298,13 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
     let shadow = textureSampleLevel(shadow_tex, clamp_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0).r;
     direct = illum * transmittance_lut_at(length(g), cos_sun) * cos_sun * shadow;
   }
-  let irradiance = direct + downwelling.rgb;
-
-  // Air between the eye and the ground point (both rays turned upward, so the LUT applies).
-  let up = -dir;
+  // Air between the eye and the ground point.
+  let uvs = ground_air_uvs(dir, ground_radius(), params.layer.w);
   let air = clamp(
-    transmittance_lut_at(length(g), dot(n, up)) / max(transmittance_lut_at(length(origin), dot(normalize(origin), up)), vec3f(1e-6)),
+    textureSampleLevel(transmittance_lut, clamp_sampler, uvs.xy, 0.0).rgb
+      / max(textureSampleLevel(transmittance_lut, clamp_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
     vec3f(0.0), vec3f(1.0));
-  return air * params.misc.y / PI * irradiance;
+  return air * params.misc.y / PI * direct;
 }
 
 struct MarchResult {
@@ -446,17 +443,9 @@ fn render(@builtin(global_invocation_id) id: vec3u) {
 
   let index = (face * size + texel.y) * size + texel.x;
   var resolved = value;
-  // Ground texels skip the first pass: it ran before any downwelling light was integrated
-  // (the cube was still empty), so it would leave a dark 4x4 dot pattern in the average.
-  let ground = cube_dir(face, (vec2f(texel) + 0.5) / f32(size)).y <= 0.0;
   if (pass_index > 0u) {
     let previous = unpack(accum[index]);
-    if (ground && pass_index == 1u) {
-      resolved = value;
-    } else {
-      let n = select(pass_index + 1u, pass_index, ground);
-      resolved = previous + (value - previous) / f32(n);
-    }
+    resolved = previous + (value - previous) / f32(pass_index + 1u);
   }
   accum[index] = pack(resolved);
 

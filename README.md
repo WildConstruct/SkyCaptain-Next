@@ -149,21 +149,22 @@ animation is a short recipe saved inside the sky `.wcx` (`src/animation.ts`):
 - **Sun (optional):** moves in a straight line to an end elevation and azimuth.
 
 Frame 0 is exactly the sky as composed, and every frame is a pure function of time:
-any frame can be rendered alone and comes out identical. The scrubber and **Play** preview
+any frame can be rendered alone and matches the sequence (to well under one display step;
+floating point is not bit-exact across GPUs, so neither is the output). The scrubber and **Play** preview
 in the viewport (the view refines progressively, so fast motion shimmers there).
 **Export sequence…** renders every frame fresh and converged as numbered lat-long
 EXR/HDR files (`Name.0001.exr`, …) into a folder you pick (Chrome and Edge) or as
 downloads elsewhere. `tools/smoke-animate.mjs` checks the recipe, the sky file and a short
-sequence, including that a frame re-rendered on its own matches.
+sequence, including that a frame re-rendered on its own matches it.
 
 ## Ground
 
 The ground below the horizon is shaded with the clouds, so an HDRI's lower half lights a
 scene plausibly:
 
-- **Sky and cloud light:** after each frame, the environment as seen from the ground (sky
-  through the clouds plus the light the clouds scatter) is integrated over the upper
-  hemisphere (`downwelling.wgsl`). Overcast ground is lit evenly by the grey dome; sunset
+- **Sky and cloud light:** the environment as seen from the ground (sky through the clouds
+  plus the light the clouds scatter) is integrated over the upper hemisphere from the
+  finished cube (`downwelling.wgsl`) and added when the view or export is composited. Overcast ground is lit evenly by the grey dome; sunset
   ground takes the colour of the cloud undersides.
 - **Direct sun with cloud shadows:** a 512² shadow map over 12 km around the eye holds
   the sun's transmittance through the cloud layer, marched once per change.

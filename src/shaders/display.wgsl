@@ -14,6 +14,19 @@ struct View {
 @group(0) @binding(3) var sky_tex: texture_cube<f32>;
 @group(0) @binding(4) var cloud_tex: texture_cube<f32>;
 @group(0) @binding(5) var transmittance_lut: texture_2d<f32>;
+@group(0) @binding(6) var<storage, read> downwelling: vec4f;
+
+// Sky and cloud light on the ground (the direct sun is already in the cloud cube): the
+// downwelling irradiance integrated from the finished cube, through the air in front.
+fn ground_ambient(dir: vec3f) -> vec3f {
+  let uvs = ground_air_uvs(dir, params.layer.z, params.layer.w);
+  if (uvs.x < 0.0) { return vec3f(0.0); }
+  let air = clamp(
+    textureSampleLevel(transmittance_lut, cube_sampler, uvs.xy, 0.0).rgb
+      / max(textureSampleLevel(transmittance_lut, cube_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
+    vec3f(0.0), vec3f(1.0));
+  return air * params.misc.y / PI * downwelling.rgb;
+}
 
 struct VsOut {
   @builtin(position) position: vec4f,
@@ -45,7 +58,7 @@ fn environment(dir: vec3f) -> vec3f {
     let r = acos(clamp(cos_angle, -1.0, 1.0)) / radius;
     background += disc * (1.0 - 0.6 * (1.0 - sqrt(max(0.0, 1.0 - r * r))));
   }
-  return background * cloud.a + cloud.rgb;
+  return background * cloud.a + cloud.rgb + ground_ambient(dir);
 }
 
 fn aces_fit(x: vec3f) -> vec3f {

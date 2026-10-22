@@ -16,7 +16,9 @@ var<workgroup> partial: array<vec3f, 64>;
 fn hemisphere_dir(i: u32, n: u32) -> vec3f {
   // Cosine-weighted Fibonacci spiral over the upper hemisphere (y up).
   let golden = 2.39996322972865332;
-  let fi = (f32(i) + 0.5) / f32(n);
+  // Stops just above the horizon (y >= 0.02): filtering at the horizon would blend in texels
+  // below it (the ground and the air in front of it), which are not sky light.
+  let fi = (f32(i) + 0.5) / f32(n) * 0.9996;
   let r = sqrt(fi);
   let phi = f32(i) * golden;
   return vec3f(r * cos(phi), sqrt(max(0.0, 1.0 - fi)), r * sin(phi));
