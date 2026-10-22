@@ -2,8 +2,8 @@
 struct Params {
   sun_dir: vec4f,     // xyz unit vector toward the sun, w = sun illuminance
   sun_color: vec4f,   // rgb tint, w = sun angular radius (radians)
-  layer: vec4f,       // cloud bottom altitude, cloud top altitude, planet radius, atmosphere top radius
-  scale: vec4f,       // shape period, detail period, weather period, max march distance
+  layer: vec4f,       // cloud base altitude, highest tower top altitude, planet radius, atmosphere top radius
+  scale: vec4f,       // shape period, detail period, weather map extent, cumulus height
   cloud: vec4f,       // coverage, type bias, density (extinction per km), detail erosion
   light: vec4f,       // ambient strength, forward g, back g, back lobe weight
   ms: vec4f,          // octave a (scatter), b (extinction), c (eccentricity), powder

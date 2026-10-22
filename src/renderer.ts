@@ -6,9 +6,10 @@ import atmosphereWgsl from './shaders/atmosphere.wgsl?raw';
 import cloudsWgsl from './shaders/clouds.wgsl?raw';
 import displayWgsl from './shaders/display.wgsl?raw';
 import { Invalidation, QUALITY, Settings, packParams } from './settings';
+import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
 
 const SKY_FACE = 256;
-const WEATHER_SIZE = 512;
+const WEATHER_SIZE = 1024;
 const TRANSMITTANCE_SIZE: [number, number] = [256, 64];
 const MS_SIZE = 32;
 
@@ -38,6 +39,8 @@ export class Renderer {
   private shapeTex: GPUTexture;
   private detailTex: GPUTexture;
   private weatherTex: GPUTexture;
+  private shapesBuffer: GPUBuffer;
+  private shapes: ShapeLayer[] = [];
   private transmittanceLut: GPUTexture;
   private msLut: GPUTexture;
   private skyCube: GPUTexture;
@@ -55,6 +58,8 @@ export class Renderer {
   private displayBindGroup!: GPUBindGroup;
 
   private cloudFrame = 0;
+  /** Increments whenever the weather map is regenerated (for minimap refreshes). */
+  weatherVersion = 0;
   private pending = new Set<Invalidation>(['sky', 'weather', 'clouds']);
   private allocatedFace = 0;
 
@@ -99,6 +104,7 @@ export class Renderer {
       size: [noise.detail, noise.detail, noise.detail], dimension: '3d', format: 'rgba8unorm', usage: storageSampled,
     });
     this.weatherTex = device.createTexture({ size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba8unorm', usage: storageSampled });
+    this.shapesBuffer = device.createBuffer({ size: SHAPES_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     this.transmittanceLut = device.createTexture({ size: TRANSMITTANCE_SIZE, format: 'rgba16float', usage: storageSampled });
     this.msLut = device.createTexture({ size: [MS_SIZE, MS_SIZE], format: 'rgba16float', usage: storageSampled });
     this.skyCube = device.createTexture({ size: [SKY_FACE, SKY_FACE, 6], format: 'rgba16float', usage: storageSampled });
@@ -141,6 +147,11 @@ export class Renderer {
   get adapterInfo(): string {
     const info = (this.device as GPUDevice & { adapterInfo?: GPUAdapterInfo }).adapterInfo;
     return info ? [info.vendor, info.architecture, info.description].filter(Boolean).join(' ') : 'unknown adapter';
+  }
+
+  setShapes(shapes: ShapeLayer[]): void {
+    this.shapes = shapes.map((s) => ({ ...s }));
+    this.pending.add('weather');
   }
 
   update(settings: Settings, invalidation: Invalidation): void {
@@ -243,6 +254,7 @@ export class Renderer {
       entries: [
         { binding: 0, resource: { buffer: this.paramsBuffer } },
         { binding: 1, resource: this.weatherTex.createView() },
+        { binding: 2, resource: { buffer: this.shapesBuffer } },
       ],
     }));
     pass.dispatchWorkgroups(WEATHER_SIZE / 8, WEATHER_SIZE / 8);
@@ -264,7 +276,11 @@ export class Renderer {
     d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
     d.queue.writeBuffer(this.viewBuffer, 0, viewData);
     if (this.pending.has('sky')) this.runSky(encoder);
-    if (this.pending.has('weather')) this.runWeather(encoder);
+    if (this.pending.has('weather')) {
+      d.queue.writeBuffer(this.shapesBuffer, 0, packShapes(this.shapes, this.settings.baseWeather));
+      this.runWeather(encoder);
+      this.weatherVersion++;
+    }
     this.pending.clear();
 
     let timed = false;
@@ -343,6 +359,20 @@ export class Renderer {
     buffer.destroy();
     target.destroy();
     return out;
+  }
+
+  /** Reads the weather map back (RGBA8, row-major, WEATHER_SIZE square) for the minimap. */
+  async readWeather(): Promise<{ size: number; data: Uint8Array }> {
+    const d = this.device;
+    const bytesPerRow = WEATHER_SIZE * 4;
+    const buffer = d.createBuffer({ size: bytesPerRow * WEATHER_SIZE, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const encoder = d.createCommandEncoder();
+    encoder.copyTextureToBuffer({ texture: this.weatherTex }, { buffer, bytesPerRow }, [WEATHER_SIZE, WEATHER_SIZE]);
+    d.queue.submit([encoder.finish()]);
+    await buffer.mapAsync(GPUMapMode.READ);
+    const data = new Uint8Array(buffer.getMappedRange()).slice();
+    buffer.destroy();
+    return { size: WEATHER_SIZE, data };
   }
 
   // Debug: reads one texel as floats. Used by tools/ to inspect scene-linear values.

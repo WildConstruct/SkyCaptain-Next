@@ -1,5 +1,10 @@
 import { DEFAULTS, QUALITY, QualityName, Settings, invalidationFor } from './settings';
 import { Renderer } from './renderer';
+import { viewUniforms } from './camera';
+import { ShapeKind, ShapeLayer, ShapeStore, createShape } from './shapes';
+import { SkyOverlay } from './ui/sky-overlay';
+import { Minimap } from './ui/minimap';
+import { ShapesPanel } from './ui/shapes-panel';
 import './style.css';
 
 interface SliderSpec {
@@ -24,6 +29,7 @@ const GROUPS: { title: string; expert?: boolean; sliders: SliderSpec[] }[] = [
   {
     title: 'Clouds',
     sliders: [
+      { key: 'baseWeather', label: 'Background weather', min: 0, max: 1, step: 0.01 },
       { key: 'coverage', label: 'Coverage', min: 0, max: 1, step: 0.005 },
       { key: 'typeBias', label: 'Type (stratus ↔ towers)', min: -1, max: 1, step: 0.01 },
       { key: 'density', label: 'Density', min: 2, max: 120, step: 0.5 },
@@ -45,10 +51,11 @@ const GROUPS: { title: string; expert?: boolean; sliders: SliderSpec[] }[] = [
     expert: true,
     sliders: [
       { key: 'cloudBottom', label: 'Cloud base', min: 0.3, max: 6, step: 0.05, unit: 'km' },
-      { key: 'cloudThickness', label: 'Layer thickness', min: 0.5, max: 10, step: 0.05, unit: 'km' },
+      { key: 'cloudThickness', label: 'Cumulus height', min: 0.5, max: 6, step: 0.05, unit: 'km' },
+      { key: 'towerHeight', label: 'Max tower height', min: 2, max: 14, step: 0.1, unit: 'km' },
       { key: 'shapeScale', label: 'Shape scale', min: 2, max: 40, step: 0.1, unit: 'km' },
       { key: 'detailScale', label: 'Detail scale', min: 0.2, max: 6, step: 0.05, unit: 'km' },
-      { key: 'weatherScale', label: 'Weather map size', min: 10, max: 200, step: 1, unit: 'km' },
+      { key: 'weatherScale', label: 'Weather map extent', min: 100, max: 600, step: 10, unit: 'km' },
       { key: 'backG', label: 'Back-scatter g', min: 0, max: 0.9, step: 0.01 },
       { key: 'backWeight', label: 'Back-scatter weight', min: 0, max: 1, step: 0.01 },
       { key: 'msA', label: 'Octave scatter a', min: 0, max: 1, step: 0.01 },
@@ -67,9 +74,8 @@ const GROUPS: { title: string; expert?: boolean; sliders: SliderSpec[] }[] = [
   },
 ];
 
-function readUrlOverrides(base: Settings): Settings {
+function readUrlOverrides(base: Settings, query: URLSearchParams): Settings {
   const s = { ...base };
-  const query = new URLSearchParams(location.search);
   for (const key of Object.keys(base) as (keyof Settings)[]) {
     const v = query.get(key);
     if (v === null) continue;
@@ -79,22 +85,21 @@ function readUrlOverrides(base: Settings): Settings {
   return s;
 }
 
-export function viewUniforms(s: Settings, aspect: number): Float32Array<ArrayBuffer> {
-  const yaw = (s.yaw * Math.PI) / 180;
-  const pitch = (s.pitch * Math.PI) / 180;
-  const f = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
-  const r = [Math.cos(yaw), 0, -Math.sin(yaw)];
-  const u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
-  const tanHalf = Math.tan((s.fov * Math.PI) / 360);
-  return new Float32Array([...r, tanHalf * aspect, ...u, tanHalf, ...f, s.ev]);
+/** `?shapes=[{"kind":"storm_cell","x":10,"z":30,...}]` seeds the layer stack (used by tools/). */
+function readUrlShapes(query: URLSearchParams): ShapeLayer[] {
+  const raw = query.get('shapes');
+  if (!raw) return [];
+  const items = JSON.parse(raw) as (Partial<ShapeLayer> & { kind: ShapeKind })[];
+  return items.map((item, i) => ({ ...createShape(item.kind, 0, 0, i + 1), ...item }));
 }
 
 async function main(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#viewport')!;
+  const overlayCanvas = document.querySelector<HTMLCanvasElement>('#overlay')!;
   const panel = document.querySelector<HTMLElement>('#controls')!;
   const status = document.querySelector<HTMLElement>('#status')!;
-  const settings = readUrlOverrides(DEFAULTS);
   const query = new URLSearchParams(location.search);
+  const settings = readUrlOverrides(DEFAULTS, query);
   const noiseSize = Number(query.get('noise') ?? 128);
 
   let renderer: Renderer;
@@ -107,9 +112,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Debug/automation hooks for tools/: raw texel reads and offscreen captures.
+  const store = new ShapeStore();
+  store.shapes = readUrlShapes(query);
+  renderer.setShapes(store.shapes);
+  store.subscribe(() => renderer.setShapes(store.shapes));
+
+  // Debug/automation hooks for tools/: raw texel reads, offscreen captures, the shape store.
   Object.assign(window, {
     skyRenderer: renderer,
+    skyShapes: store,
     skyCapture: (w: number, h: number) => renderer.capture(viewUniforms(settings, w / h), w, h),
   });
 
@@ -124,6 +135,8 @@ async function main(): Promise<void> {
     renderer.update(settings, invalidationFor(key));
   };
 
+  const overlay = new SkyOverlay({ canvas: overlayCanvas, settings, store, setView: set });
+
   const header = document.createElement('div');
   header.className = 'row actions';
   const quality = document.createElement('select');
@@ -133,10 +146,28 @@ async function main(): Promise<void> {
     renderer.update(settings, 'clouds');
   };
   const reroll = document.createElement('button');
-  reroll.textContent = 'New weather';
+  reroll.textContent = 'New background weather';
   reroll.onclick = () => set('seed', settings.seed + 1);
   header.append(quality, reroll);
   panel.append(header);
+
+  const mapCanvas = document.createElement('canvas');
+  mapCanvas.className = 'minimap';
+  mapCanvas.title = 'Weather map. Drag shapes, handles resize and rotate, wheel zooms.';
+  panel.append(mapCanvas);
+  const minimap = new Minimap(mapCanvas, settings, store);
+
+  const shapesSection = document.createElement('details');
+  shapesSection.open = true;
+  const shapesSummary = document.createElement('summary');
+  shapesSummary.textContent = 'Shapes';
+  const shapesRoot = document.createElement('div');
+  shapesSection.append(shapesSummary, shapesRoot);
+  panel.append(shapesSection);
+  new ShapesPanel(shapesRoot, store, (kind) => {
+    const [x, z] = overlay.centerMapPoint();
+    store.add(createShape(kind, x, z, Math.floor(Math.random() * 10000)));
+  });
 
   for (const group of GROUPS) {
     const details = document.createElement('details');
@@ -167,23 +198,21 @@ async function main(): Promise<void> {
     panel.append(details);
   }
 
-  let drag: { x: number; y: number } | null = null;
-  canvas.addEventListener('pointerdown', (e) => {
-    drag = { x: e.clientX, y: e.clientY };
-    canvas.setPointerCapture(e.pointerId);
+  window.addEventListener('keydown', (e) => {
+    const typing = e.target instanceof HTMLInputElement && e.target.type !== 'range';
+    if (typing) return;
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      if (e.shiftKey) store.redo(); else store.undo();
+    } else if (mod && e.key.toLowerCase() === 'y') {
+      e.preventDefault();
+      store.redo();
+    } else if ((e.key === 'Delete' || e.key === 'Backspace') && store.selected) {
+      e.preventDefault();
+      store.remove(store.selected);
+    }
   });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!drag) return;
-    const scale = settings.fov / canvas.clientHeight;
-    set('yaw', settings.yaw - (e.clientX - drag.x) * scale);
-    set('pitch', Math.max(-89, Math.min(89, settings.pitch + (e.clientY - drag.y) * scale)));
-    drag = { x: e.clientX, y: e.clientY };
-  });
-  canvas.addEventListener('pointerup', () => { drag = null; });
-  canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    set('fov', Math.max(20, Math.min(120, settings.fov * Math.exp(e.deltaY * 0.001))));
-  }, { passive: false });
 
   const resize = () => {
     const dpr = Math.min(window.devicePixelRatio, 2);
@@ -193,6 +222,19 @@ async function main(): Promise<void> {
   new ResizeObserver(resize).observe(canvas);
   resize();
 
+  // Minimap coverage refreshes after the weather map changes, one readback at a time.
+  let shownWeather = -1;
+  let reading = false;
+  const refreshMinimap = () => {
+    if (reading || renderer.weatherVersion === shownWeather) return;
+    reading = true;
+    const version = renderer.weatherVersion;
+    renderer.readWeather().then(({ size, data }) => {
+      minimap.setWeather(size, data, settings.weatherScale);
+      shownWeather = version;
+    }).finally(() => { reading = false; });
+  };
+
   const adapter = renderer.adapterInfo;
   const loop = () => {
     const stats = renderer.frame(viewUniforms(settings, canvas.width / canvas.height));
@@ -200,6 +242,10 @@ async function main(): Promise<void> {
     const timing = stats.cloudMs === null ? '' : ` · cloud pass ${stats.cloudMs.toFixed(2)} ms`;
     status.textContent = `${progress}${timing} · ${stats.faceSize}² cube · ${adapter}`;
     document.body.dataset.converged = String(stats.frame >= stats.totalFrames);
+    refreshMinimap();
+    minimap.viewAspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
+    minimap.draw();
+    overlay.draw();
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

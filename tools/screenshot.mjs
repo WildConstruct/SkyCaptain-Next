@@ -1,11 +1,14 @@
 // Renders the view headlessly and saves a PNG once the environment cube converges.
-// Usage: node tools/screenshot.mjs <out.png> [query string] [timeout seconds]
+// Usage: node tools/screenshot.mjs <out.png> [query string] [timeout seconds] [--page]
+// --page also saves <out>-page.png: the whole UI with the render pasted into the viewport.
 // Uses offscreen capture (?headless=1) because headless canvas presentation is unreliable;
 // software WebGPU (SwiftShader) is slow but fine for judging looks.
 import { chromium } from 'playwright-core';
 import { existsSync, writeFileSync } from 'node:fs';
 
-const [out = 'shots/view.png', query = '', timeoutS = '600'] = process.argv.slice(2);
+const args = process.argv.slice(2).filter((a) => a !== '--page');
+const wholePage = process.argv.includes('--page');
+const [out = 'shots/view.png', query = '', timeoutS = '600'] = args;
 const base = process.env.SKY_URL ?? 'http://127.0.0.1:5173/';
 const executablePath = [process.env.CHROME_PATH, '/opt/pw-browsers/chromium-1194/chrome-linux/chrome'].find((p) => p && existsSync(p));
 const browser = await chromium.launch({
@@ -32,4 +35,16 @@ const dataUrl = await page.evaluate(async () => {
   return c.toDataURL('image/png');
 });
 writeFileSync(out, Buffer.from(dataUrl.split(',')[1], 'base64'));
+if (wholePage) {
+  // Headless mode never configures the WebGPU canvas, so paint the capture into it with 2D.
+  await page.evaluate(async () => {
+    const canvas = document.querySelector('#viewport');
+    const [w, h] = [canvas.clientWidth, canvas.clientHeight];
+    const pixels = await window.skyCapture(w, h);
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), 0, 0);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  });
+  await page.screenshot({ path: out.replace(/\.png$/, '-page.png') });
+}
 await browser.close();

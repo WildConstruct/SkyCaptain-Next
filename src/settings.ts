@@ -27,9 +27,11 @@ export interface Settings {
   erosion: number;
   cloudBottom: number;
   cloudThickness: number;
+  towerHeight: number;
   shapeScale: number;
   detailScale: number;
   weatherScale: number;
+  baseWeather: number;
   windX: number;
   windZ: number;
   ambient: number;
@@ -61,9 +63,11 @@ export const DEFAULTS: Settings = {
   erosion: 0.4,
   cloudBottom: 1.5,
   cloudThickness: 3.5,
+  towerHeight: 10,
   shapeScale: 9,
   detailScale: 1.2,
-  weatherScale: 60,
+  weatherScale: 300,
+  baseWeather: 1,
   windX: 0,
   windZ: 0,
   ambient: 1,
@@ -87,7 +91,7 @@ export const DEFAULTS: Settings = {
 export type Invalidation = 'view' | 'clouds' | 'weather' | 'sky';
 
 const SKY_KEYS: (keyof Settings)[] = ['sunElevation', 'sunAzimuth', 'sunIntensity', 'haze', 'groundAlbedo'];
-const WEATHER_KEYS: (keyof Settings)[] = ['seed'];
+const WEATHER_KEYS: (keyof Settings)[] = ['seed', 'weatherScale', 'baseWeather'];
 const VIEW_KEYS: (keyof Settings)[] = ['ev', 'fov', 'yaw', 'pitch'];
 
 export function invalidationFor(key: keyof Settings): Invalidation {
@@ -113,8 +117,8 @@ export function packParams(s: Settings, frame: number): Float32Array<ArrayBuffer
   return new Float32Array([
     sun[0], sun[1], sun[2], s.sunIntensity,
     1, 1, 1, SUN_ANGULAR_RADIUS,
-    s.cloudBottom, s.cloudBottom + s.cloudThickness, EARTH_RADIUS_KM, ATMOSPHERE_TOP_KM,
-    s.shapeScale, s.detailScale, s.weatherScale, 40,
+    s.cloudBottom, s.cloudBottom + Math.max(s.towerHeight, s.cloudThickness), EARTH_RADIUS_KM, ATMOSPHERE_TOP_KM,
+    s.shapeScale, s.detailScale, s.weatherScale, s.cloudThickness,
     s.coverage, s.typeBias, s.density, s.erosion,
     s.ambient, s.forwardG, s.backG, s.backWeight,
     s.msA, s.msB, s.msC, s.powder,

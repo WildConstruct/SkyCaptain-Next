@@ -24,13 +24,24 @@ const BAYER_OFFSETS = array<vec2u, 16>(
 
 fn ground_radius() -> f32 { return params.layer.z; }
 fn cloud_bottom() -> f32 { return params.layer.x; }
+// Top of the march shell: the tallest tower possible.
 fn cloud_top() -> f32 { return params.layer.y; }
+// Height of ordinary cumulus; light-march and occlusion distances scale with it.
+fn cumulus_height() -> f32 { return params.scale.w; }
 
-// Vertical profile by cloud type: 0 = thin stratus, 0.5 = cumulus, 1 = towering cumulonimbus.
+const MAX_MARCH_KM: f32 = 40.0;
+
+// Each cloud type has its own height: stratus 0.35 km, cumulus the layer height, towers up
+// to the top of the shell.
+fn cloud_height(kind: f32) -> f32 {
+  if (kind < 0.5) { return mix(0.35, cumulus_height(), kind * 2.0); }
+  return mix(cumulus_height(), cloud_top() - cloud_bottom(), (kind - 0.5) * 2.0);
+}
+
+// Vertical profile within a cloud's own height (h = 0 base .. 1 top).
 fn height_profile(h: f32, kind: f32) -> f32 {
-  let top = mix(0.2, 1.0, kind);
   let bottom_ramp = clamp(remap(h, 0.0, 0.07, 0.0, 1.0), 0.0, 1.0);
-  let top_ramp = clamp(remap(h, top * 0.6, top, 1.0, 0.0), 0.0, 1.0);
+  let top_ramp = clamp(remap(h, 0.6, 1.0, 1.0, 0.0), 0.0, 1.0);
   // Towers carry more density higher up (anvil); stratus stays bottom-weighted.
   let gradient = mix(1.0 - h * 0.6, 0.7 + h * 0.3, kind);
   return bottom_ramp * top_ramp * gradient;
@@ -45,21 +56,25 @@ fn cloud_density(p: vec3f, with_detail: bool) -> Sample {
   var s: Sample;
   s.density = 0.0;
   let altitude = length(p) - ground_radius();
-  let h = (altitude - cloud_bottom()) / (cloud_top() - cloud_bottom());
-  s.h = h;
-  if (h <= 0.0 || h >= 1.0) { return s; }
+  if (altitude <= cloud_bottom() || altitude >= cloud_top()) { return s; }
 
-  let weather = textureSampleLevel(weather_tex, repeat_sampler, (p.xz + params.wind.xy) / params.scale.z + 0.5, 0.0);
+  let weather = textureSampleLevel(weather_tex, clamp_sampler, (p.xz + params.wind.xy) / params.scale.z + 0.5, 0.0);
   let coverage = clamp(weather.r + params.cloud.x * 2.0 - 1.0, 0.0, 1.0);
   if (coverage <= 0.0) { return s; }
   let kind = clamp(weather.g + params.cloud.y, 0.0, 1.0);
+  let h = (altitude - cloud_bottom()) / cloud_height(kind);
+  s.h = h;
+  if (h >= 1.0) { return s; }
 
   let local = vec3f(p.x + params.wind.x, altitude, p.z + params.wind.y);
   let shape = textureSampleLevel(shape_tex, repeat_sampler, local / params.scale.x, 0.0);
   let low_fbm = dot(shape.gba, vec3f(0.625, 0.25, 0.125));
   var base = remap(shape.r, low_fbm - 1.0, 1.0, 0.0, 1.0);
   base *= height_profile(h, kind);
-  base = clamp(remap(base, 1.0 - coverage, 1.0, 0.0, 1.0), 0.0, 1.0) * coverage;
+  // Coverage shrinks with height so tops round off; towers narrow more as they rise.
+  let tower = clamp((kind - 0.5) * 2.0, 0.0, 1.0);
+  let cov_h = coverage * (1.0 - smoothstep(0.35, 1.0, h) * mix(0.3, 0.45, tower));
+  base = clamp(remap(base, 1.0 - cov_h, 1.0, 0.0, 1.0), 0.0, 1.0) * cov_h;
   if (base <= 0.0) { return s; }
 
   if (with_detail) {
@@ -91,8 +106,7 @@ fn phase(cos_theta: f32, scale: f32) -> f32 {
 fn light_optical_depth(p: vec3f, jitter: vec3f) -> f32 {
   let sun = params.sun_dir.xyz;
   let steps = i32(params.march.y);
-  let thickness = cloud_top() - cloud_bottom();
-  var ds = thickness * 0.04;
+  var ds = cumulus_height() * 0.04;
   var travelled = 0.0;
   var depth = 0.0;
   for (var i = 0; i < steps; i++) {
@@ -119,7 +133,10 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
   let t0 = ray_sphere(origin, dir, ground_radius() + cloud_bottom()).y;
   let t_top = ray_sphere(origin, dir, ground_radius() + cloud_top()).y;
-  let t1 = min(t_top, t0 + params.scale.w);
+  let t1 = min(t_top, t0 + MAX_MARCH_KM);
+  // Step length is set by the cumulus layer, so ordinary clouds get the full step budget;
+  // the march continues at the same spacing through the tower region above.
+  let t_cumulus = min(ray_sphere(origin, dir, ground_radius() + cloud_bottom() + cumulus_height()).y, t1);
   if (t0 <= 0.0 || t1 <= t0) { return result; }
 
   let sun = params.sun_dir.xyz;
@@ -137,7 +154,7 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   let ground_bounce = illum * sun_transmittance(origin) * max(sun.y, 0.0) * params.misc.y / PI;
 
   let max_steps = i32(params.march.x);
-  let dt = (t1 - t0) / f32(max_steps);
+  let dt = max(t_cumulus - t0, 1e-3) / f32(max_steps);
   let jitter = hash33(seed);
   var t = t0 + dt * jitter.x;
   var transmittance = 1.0;
@@ -149,7 +166,7 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
     octave_phase[k] = phase(cos_theta, pow(params.ms.z, f32(k)));
   }
 
-  for (var i = 0; i < max_steps * 2; i++) {
+  for (var i = 0; i < max_steps * 3; i++) {
     if (t >= t1 || transmittance < 0.01) { break; }
     let p = origin + dir * t;
     let coarse = cloud_density(p, false);
@@ -171,8 +188,8 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
       }
       let powder = mix(1.0, 1.0 - exp(-sigma_t * 0.2), params.ms.w);
       // Ambient is occluded by the cloud above: one cheap upward sample gives dark cores, bright tops.
-      let above = cloud_density(p + normalize(p) * (cloud_top() - cloud_bottom()) * 0.15, false).density;
-      let occlusion = exp(-(above + s.density) * sigma_scale * (cloud_top() - cloud_bottom()) * 0.15);
+      let above = cloud_density(p + normalize(p) * cumulus_height() * 0.15, false).density;
+      let occlusion = exp(-(above + s.density) * sigma_scale * cumulus_height() * 0.15);
       let ambient = mix(sky_side * 0.6 + ground_bounce, sky_top * 0.7 + sky_side * 0.3, s.h) * params.light.x * mix(0.15, 1.0, occlusion);
       let in_scatter = sigma_s * (illum * sun_transmittance(p) * sun_scatter * powder + ambient);
       let step_t = exp(-sigma_t * dt);
