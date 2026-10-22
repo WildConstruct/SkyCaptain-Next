@@ -1,5 +1,9 @@
 import { DEFAULTS, QUALITY, QualityName, Settings, invalidationFor } from './settings';
-import { Renderer } from './renderer';
+import { Renderer, WEATHER_SIZE } from './renderer';
+import { History } from './history';
+import { BRUSH_TOOLS, PaintLayers } from './paint';
+import { Stroke, ToolState } from './ui/tools';
+import { BrushPanel } from './ui/brush-panel';
 import { viewUniforms } from './camera';
 import { ShapeKind, ShapeLayer, ShapeStore, createShape } from './shapes';
 import { SkyOverlay } from './ui/sky-overlay';
@@ -112,7 +116,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  const store = new ShapeStore();
+  const history = new History();
+  const store = new ShapeStore(history);
+  const layers = new PaintLayers(WEATHER_SIZE, history);
+  layers.extent = settings.weatherScale;
+  const tools = new ToolState();
+  const stroke = new Stroke(layers, tools);
   store.shapes = readUrlShapes(query);
   renderer.setShapes(store.shapes);
   store.subscribe(() => renderer.setShapes(store.shapes));
@@ -121,6 +130,9 @@ async function main(): Promise<void> {
   Object.assign(window, {
     skyRenderer: renderer,
     skyShapes: store,
+    skyPaint: layers,
+    skyTools: tools,
+    skyHistory: history,
     skyCapture: (w: number, h: number) => renderer.capture(viewUniforms(settings, w / h), w, h),
   });
 
@@ -135,7 +147,7 @@ async function main(): Promise<void> {
     renderer.update(settings, invalidationFor(key));
   };
 
-  const overlay = new SkyOverlay({ canvas: overlayCanvas, settings, store, setView: set });
+  const overlay = new SkyOverlay({ canvas: overlayCanvas, settings, store, tools, stroke, setView: set });
 
   const header = document.createElement('div');
   header.className = 'row actions';
@@ -155,7 +167,16 @@ async function main(): Promise<void> {
   mapCanvas.className = 'minimap';
   mapCanvas.title = 'Weather map. Drag shapes, handles resize and rotate, wheel zooms.';
   panel.append(mapCanvas);
-  const minimap = new Minimap(mapCanvas, settings, store);
+  const minimap = new Minimap(mapCanvas, settings, store, tools, stroke);
+
+  const toolsSection = document.createElement('details');
+  toolsSection.open = true;
+  const toolsSummary = document.createElement('summary');
+  toolsSummary.textContent = 'Tools';
+  const toolsRoot = document.createElement('div');
+  toolsSection.append(toolsSummary, toolsRoot);
+  panel.append(toolsSection);
+  new BrushPanel(toolsRoot, tools, layers);
 
   const shapesSection = document.createElement('details');
   shapesSection.open = true;
@@ -204,11 +225,18 @@ async function main(): Promise<void> {
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault();
-      if (e.shiftKey) store.redo(); else store.undo();
+      if (e.shiftKey) history.redo(); else history.undo();
     } else if (mod && e.key.toLowerCase() === 'y') {
       e.preventDefault();
-      store.redo();
-    } else if ((e.key === 'Delete' || e.key === 'Backspace') && store.selected) {
+      history.redo();
+    } else if (!mod && e.key.toLowerCase() === 'v') {
+      tools.setMode('shapes');
+    } else if (!mod && /^[1-6]$/.test(e.key)) {
+      tools.setMode(BRUSH_TOOLS[Number(e.key) - 1].tool);
+    } else if (!mod && (e.key === '[' || e.key === ']')) {
+      const size = tools.brush.size * (e.key === ']' ? 1.2 : 1 / 1.2);
+      tools.setBrush({ size: Math.max(0.5, Math.min(40, size)) });
+    } else if ((e.key === 'Delete' || e.key === 'Backspace') && store.selected && !tools.painting) {
       e.preventDefault();
       store.remove(store.selected);
     }
@@ -237,6 +265,8 @@ async function main(): Promise<void> {
 
   const adapter = renderer.adapterInfo;
   const loop = () => {
+    layers.extent = settings.weatherScale;
+    layers.flush((name, x, y, w, h, data) => renderer.uploadLayer(name, x, y, w, h, data));
     const stats = renderer.frame(viewUniforms(settings, canvas.width / canvas.height));
     const progress = stats.frame >= stats.totalFrames ? 'converged' : `refining ${stats.frame}/${stats.totalFrames}`;
     const timing = stats.cloudMs === null ? '' : ` · cloud pass ${stats.cloudMs.toFixed(2)} ms`;

@@ -1,7 +1,8 @@
-// Weather map: procedural background, then shape layers composited in order.
+// Weather map: procedural background, then shape layers in order, then paint.
 // The map covers a fixed square of side params.scale.z km centred on the eye (no tiling).
 // r = coverage, g = cloud type (0 stratus .. 1 towering), b = density multiplier.
-// Paint layers will composite after shapes.
+// The smudge warp displaces where the whole composite is evaluated, so it drags
+// background, shapes and paint together.
 
 struct Shape {
   center: vec2f,     // km, weather-map space
@@ -31,6 +32,11 @@ const SHAPE_HAZE_SHEET = 4.0;
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var weather_out: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<storage, read> shapes: Shapes;
+// paint: coverage delta, type target, type weight, density delta
+@group(0) @binding(3) var paint_tex: texture_2d<f32>;
+// warp: displacement in km (xy)
+@group(0) @binding(4) var warp_tex: texture_2d<f32>;
+@group(0) @binding(5) var layer_sampler: sampler;
 
 fn weather_fbm(uv: vec2f, freq: i32, seed: f32) -> f32 {
   var sum = 0.0;
@@ -133,9 +139,11 @@ fn apply_shape(cell: Cell, shape: Shape, xz: vec2f) -> Cell {
 fn generate(@builtin(global_invocation_id) id: vec3u) {
   let size = textureDimensions(weather_out);
   if (any(id.xy >= size)) { return; }
-  let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
   let extent = params.scale.z;
-  let xz = (uv - 0.5) * extent;
+  let pixel_uv = (vec2f(id.xy) + 0.5) / vec2f(size);
+  let warp = textureSampleLevel(warp_tex, layer_sampler, pixel_uv, 0.0).xy;
+  let xz = (pixel_uv - 0.5) * extent - warp;
+  let uv = xz / extent + 0.5;
   let seed = params.misc.z;
 
   // Background weather: ~15 km coverage features regardless of map extent.
@@ -149,5 +157,10 @@ fn generate(@builtin(global_invocation_id) id: vec3u) {
   for (var i = 0u; i < min(shapes.count, 16u); i++) {
     cell = apply_shape(cell, shapes.items[i], xz);
   }
+
+  let paint = textureSampleLevel(paint_tex, layer_sampler, uv, 0.0);
+  cell.coverage = clamp(cell.coverage + paint.r, 0.0, 1.0);
+  cell.kind = mix(cell.kind, paint.g, clamp(paint.b, 0.0, 1.0));
+  cell.density = clamp(cell.density + paint.a, 0.05, 1.0);
   textureStore(weather_out, id.xy, vec4f(cell.coverage, cell.kind, cell.density, 1.0));
 }

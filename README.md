@@ -62,15 +62,34 @@ Editing:
 `node tools/smoke-shapes.mjs` checks these interactions and the GPU weather map
 against the dev server.
 
+## Painting
+
+![Painting](docs/look/paint-001.png)
+
+Paint layers are applied after the shapes. Brushes (keys 1 to 6; V returns to Shapes):
+
+- **Cloud:** adds coverage up to **Max coverage**. Below 1, the noise still carves
+  separate clouds; 1 paints toward an overcast deck. Can also set the cloud type.
+- **Clear:** removes coverage.
+- **Type:** pushes clouds toward stratus or towers.
+- **Density:** thickens, or thins.
+- **Scatter:** sprays small separate clouds.
+- **Smudge:** drags the whole weather (background, shapes and paint) along the
+  stroke. It writes a displacement field rather than moving pixels, so it stays
+  non-destructive.
+
+Paint in the sky or top-down on the minimap. With a brush active, right-drag or
+Space-drag looks around. `[` and `]` change brush size. Shapes and paint share one
+undo history; paint undo stores only the 64×64 tiles a stroke touched.
+`node tools/smoke-paint.mjs` checks each brush against the GPU weather map.
+
 ## Roadmap
 
 1. **Look spike.** Done.
 2. **Shapes.** Done: five generators, sky and minimap editing, undo.
 3. **Speed.** Measure on M1 and 4090. Tune steps, empty-space skipping and tiers.
    Target: a visible draft in one frame and convergence in about 1 s on M1 Laptop tier.
-4. **Painting.** Paint layers resolved into the weather map after the shapes:
-   coverage, type, density, erase, wind smudge and scatter, painted directly in the
-   sky.
+4. **Painting.** Done: six brushes, sky and minimap painting, shared undo.
 5. **PSG weather.** Prompt Spaghetti graphs drive shape layers and sky settings,
    with reroll and locks; see [docs/psg-weather.md](docs/psg-weather.md).
 6. **Look polish.** Cumulonimbus anvils, ground shadows from clouds, horizon and

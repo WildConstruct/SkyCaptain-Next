@@ -7,9 +7,10 @@ import cloudsWgsl from './shaders/clouds.wgsl?raw';
 import displayWgsl from './shaders/display.wgsl?raw';
 import { Invalidation, QUALITY, Settings, packParams } from './settings';
 import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
+import type { LayerName } from './paint';
 
 const SKY_FACE = 256;
-const WEATHER_SIZE = 1024;
+export const WEATHER_SIZE = 1024;
 const TRANSMITTANCE_SIZE: [number, number] = [256, 64];
 const MS_SIZE = 32;
 
@@ -40,6 +41,7 @@ export class Renderer {
   private detailTex: GPUTexture;
   private weatherTex: GPUTexture;
   private shapesBuffer: GPUBuffer;
+  private layerTex: Record<LayerName, GPUTexture>;
   private shapes: ShapeLayer[] = [];
   private transmittanceLut: GPUTexture;
   private msLut: GPUTexture;
@@ -105,6 +107,10 @@ export class Renderer {
     });
     this.weatherTex = device.createTexture({ size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba8unorm', usage: storageSampled });
     this.shapesBuffer = device.createBuffer({ size: SHAPES_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    const layer = () => device.createTexture({
+      size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    this.layerTex = { paint: layer(), warp: layer() };
     this.transmittanceLut = device.createTexture({ size: TRANSMITTANCE_SIZE, format: 'rgba16float', usage: storageSampled });
     this.msLut = device.createTexture({ size: [MS_SIZE, MS_SIZE], format: 'rgba16float', usage: storageSampled });
     this.skyCube = device.createTexture({ size: [SKY_FACE, SKY_FACE, 6], format: 'rgba16float', usage: storageSampled });
@@ -147,6 +153,17 @@ export class Renderer {
   get adapterInfo(): string {
     const info = (this.device as GPUDevice & { adapterInfo?: GPUAdapterInfo }).adapterInfo;
     return info ? [info.vendor, info.architecture, info.description].filter(Boolean).join(' ') : 'unknown adapter';
+  }
+
+  /** Uploads a rectangle of a paint layer (RGBA half floats) and regenerates the weather map. */
+  uploadLayer(name: LayerName, x: number, y: number, w: number, h: number, data: Uint16Array): void {
+    this.device.queue.writeTexture(
+      { texture: this.layerTex[name], origin: [x, y] },
+      data as Uint16Array<ArrayBuffer>,
+      { bytesPerRow: w * 8, rowsPerImage: h },
+      [w, h],
+    );
+    this.pending.add('weather');
   }
 
   setShapes(shapes: ShapeLayer[]): void {
@@ -255,6 +272,9 @@ export class Renderer {
         { binding: 0, resource: { buffer: this.paramsBuffer } },
         { binding: 1, resource: this.weatherTex.createView() },
         { binding: 2, resource: { buffer: this.shapesBuffer } },
+        { binding: 3, resource: this.layerTex.paint.createView() },
+        { binding: 4, resource: this.layerTex.warp.createView() },
+        { binding: 5, resource: this.clampSampler },
       ],
     }));
     pass.dispatchWorkgroups(WEATHER_SIZE / 8, WEATHER_SIZE / 8);

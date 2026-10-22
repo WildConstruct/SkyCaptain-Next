@@ -1,9 +1,11 @@
 // Top-down weather map: coverage and type from the GPU weather map, shape outlines with
 // move / size-and-rotate / aspect handles, the eye, the view wedge and the sun direction.
+// With a brush active, dragging paints top-down.
 // North (+z) is up, east (+x) is right.
 
 import type { Settings } from '../settings';
 import { ShapeLayer, ShapeStore, shapeHandles, shapeOutline } from '../shapes';
+import { Stroke, ToolState } from './tools';
 
 type Handle = 'move' | 'size' | 'aspect';
 
@@ -16,12 +18,20 @@ export class Minimap {
   /** Viewport width / height, for the horizontal extent of the view wedge. */
   viewAspect = 16 / 9;
   private drag: { id: string; handle: Handle; dx: number; dz: number } | null = null;
+  private hover: [number, number] | null = null;
 
-  constructor(private canvas: HTMLCanvasElement, private settings: Settings, private store: ShapeStore) {
+  constructor(
+    private canvas: HTMLCanvasElement,
+    private settings: Settings,
+    private store: ShapeStore,
+    private tools: ToolState,
+    private stroke: Stroke,
+  ) {
     this.ctx = canvas.getContext('2d')!;
     canvas.addEventListener('pointerdown', (e) => this.down(e));
     canvas.addEventListener('pointermove', (e) => this.move(e));
-    canvas.addEventListener('pointerup', () => { this.drag = null; });
+    canvas.addEventListener('pointerup', () => { this.drag = null; this.stroke.end(); });
+    canvas.addEventListener('pointerleave', () => { this.hover = null; });
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       this.radius = Math.max(15, Math.min(this.settings.weatherScale / 2, this.radius * Math.exp(e.deltaY * 0.001)));
@@ -77,6 +87,10 @@ export class Minimap {
   private down(e: PointerEvent): void {
     this.canvas.setPointerCapture(e.pointerId);
     const [x, z] = this.toMap(e);
+    if (this.tools.painting) {
+      if (e.button === 0) this.stroke.begin([x, z]);
+      return;
+    }
     const current = this.store.current;
     const handle = current ? this.handleAt(current, x, z) : null;
     if (current && handle) {
@@ -96,6 +110,12 @@ export class Minimap {
 
   private move(e: PointerEvent): void {
     const [x, z] = this.toMap(e);
+    this.hover = [x, z];
+    if (this.tools.painting) {
+      this.canvas.style.cursor = 'none';
+      if (this.stroke.active) this.stroke.move([x, z]);
+      return;
+    }
     if (!this.drag) {
       const current = this.store.current;
       this.canvas.style.cursor = current && this.handleAt(current, x, z) ? 'crosshair' : this.store.hit(x, z) ? 'move' : 'default';
@@ -200,6 +220,15 @@ export class Minimap {
         ctx.fill();
       }
     }
+    if (this.tools.painting && this.hover) {
+      const [hx, hy] = this.toCanvas(this.hover[0], this.hover[1]);
+      ctx.beginPath();
+      ctx.arc(hx, hy, this.tools.brush.size * k, 0, Math.PI * 2);
+      ctx.lineWidth = dpr;
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.stroke();
+    }
+
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.font = `${10 * dpr}px ui-sans-serif, system-ui, sans-serif`;
     ctx.fillText('N', size / 2 - 3 * dpr, 12 * dpr);

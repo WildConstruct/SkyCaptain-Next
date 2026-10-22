@@ -1,14 +1,18 @@
-// Draws shape outlines in the sky and handles direct manipulation in the viewport:
-// drag a shape to move it, drag empty sky to look around, wheel to zoom.
+// Draws shape outlines and the brush cursor in the sky, and handles direct manipulation:
+// with the Shapes tool, drag a shape to move it and drag empty sky to look around; with a
+// brush, left-drag paints and right-drag (or Space-drag) looks. Wheel zooms.
 
 import { dirFromMapPoint, mapPointFromDir, project, rayDir } from '../camera';
 import type { Settings } from '../settings';
 import { ShapeStore, labelFor, shapeOutline } from '../shapes';
+import { Stroke, ToolState } from './tools';
 
 export interface SkyOverlayOptions {
   canvas: HTMLCanvasElement;
   settings: Settings;
   store: ShapeStore;
+  tools: ToolState;
+  stroke: Stroke;
   /** Called for camera changes (yaw, pitch, fov). */
   setView: (key: 'yaw' | 'pitch' | 'fov', value: number) => void;
 }
@@ -18,7 +22,10 @@ export class SkyOverlay {
   private drag:
     | { mode: 'look'; x: number; y: number }
     | { mode: 'move'; id: string; dx: number; dz: number }
+    | { mode: 'paint' }
     | null = null;
+  private hover: [number, number] | null = null;
+  private spaceHeld = false;
 
   constructor(private o: SkyOverlayOptions) {
     this.ctx = o.canvas.getContext('2d')!;
@@ -27,6 +34,10 @@ export class SkyOverlay {
     c.addEventListener('pointermove', (e) => this.move(e));
     c.addEventListener('pointerup', () => this.up());
     c.addEventListener('pointercancel', () => this.up());
+    c.addEventListener('pointerleave', () => { this.hover = null; });
+    c.addEventListener('contextmenu', (e) => e.preventDefault());
+    window.addEventListener('keydown', (e) => { if (e.code === 'Space' && e.target === document.body) { this.spaceHeld = true; e.preventDefault(); } });
+    window.addEventListener('keyup', (e) => { if (e.code === 'Space') this.spaceHeld = false; });
     c.addEventListener('wheel', (e) => {
       e.preventDefault();
       o.setView('fov', Math.max(20, Math.min(120, o.settings.fov * Math.exp(e.deltaY * 0.001))));
@@ -57,6 +68,15 @@ export class SkyOverlay {
   private down(e: PointerEvent): void {
     this.o.canvas.setPointerCapture(e.pointerId);
     const p = this.mapPointAt(e);
+    if (this.o.tools.painting) {
+      if (e.button === 0 && !this.spaceHeld && p) {
+        this.o.stroke.begin(p);
+        this.drag = { mode: 'paint' };
+      } else {
+        this.drag = { mode: 'look', x: e.clientX, y: e.clientY };
+      }
+      return;
+    }
     const hit = p ? this.o.store.hit(p[0], p[1]) : undefined;
     if (p && hit) {
       this.o.store.checkpoint();
@@ -69,9 +89,14 @@ export class SkyOverlay {
 
   private move(e: PointerEvent): void {
     const s = this.o.settings;
+    this.hover = this.mapPointAt(e);
     if (!this.drag) {
-      const p = this.mapPointAt(e);
-      this.o.canvas.style.cursor = p && this.o.store.hit(p[0], p[1]) ? 'move' : 'grab';
+      const p = this.hover;
+      this.o.canvas.style.cursor = this.o.tools.painting ? (p ? 'none' : 'grab') : p && this.o.store.hit(p[0], p[1]) ? 'move' : 'grab';
+      return;
+    }
+    if (this.drag.mode === 'paint') {
+      if (this.hover) this.o.stroke.move(this.hover);
       return;
     }
     if (this.drag.mode === 'look') {
@@ -86,6 +111,7 @@ export class SkyOverlay {
   }
 
   private up(): void {
+    if (this.drag?.mode === 'paint') this.o.stroke.end();
     this.drag = null;
   }
 
@@ -105,6 +131,28 @@ export class SkyOverlay {
       const ndc = project(s, aspect, dir);
       return ndc ? [(ndc[0] * 0.5 + 0.5) * w, (0.5 - ndc[1] * 0.5) * h] : null;
     };
+
+    if (this.o.tools.painting && this.hover && !(this.drag?.mode === 'look')) {
+      // Brush footprint on the cloud base.
+      const [hx, hz] = this.hover;
+      const r = this.o.tools.brush.size;
+      ctx.beginPath();
+      let pen = false;
+      for (let i = 0; i <= 48; i++) {
+        const a = (i / 48) * Math.PI * 2;
+        const pt = toScreen(hx + Math.cos(a) * r, hz + Math.sin(a) * r);
+        if (!pt) { pen = false; continue; }
+        if (pen) ctx.lineTo(pt[0], pt[1]); else ctx.moveTo(pt[0], pt[1]);
+        pen = true;
+      }
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.stroke();
+      ctx.lineWidth = 1 * dpr;
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.stroke();
+    }
 
     for (const shape of this.o.store.shapes) {
       if (!shape.visible) continue;

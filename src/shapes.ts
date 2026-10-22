@@ -1,6 +1,8 @@
 // Shape layers: weather generators placed on the map. They resolve into the weather map
-// on the GPU (weather.wgsl); this module owns the editable model, its undo history,
+// on the GPU (weather.wgsl); this module owns the editable model, its undo snapshots,
 // GPU packing, and the CPU geometry used for hit testing and outlines.
+
+import type { History, HistoryEntry } from './history';
 
 export type ShapeKind = 'cumulus_field' | 'storm_cell' | 'front' | 'clear_hole' | 'haze_sheet';
 
@@ -126,13 +128,13 @@ export function shapeHandles(s: ShapeLayer): { size: [number, number]; aspect: [
 
 type Listener = () => void;
 
-/** Shape layers plus selection and snapshot-based undo. */
+/** Shape layers plus selection; edits checkpoint into the shared history. */
 export class ShapeStore {
   shapes: ShapeLayer[] = [];
   selected: string | null = null;
-  private undoStack: string[] = [];
-  private redoStack: string[] = [];
   private listeners = new Set<Listener>();
+
+  constructor(private history: History) {}
 
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn);
@@ -149,23 +151,17 @@ export class ShapeStore {
 
   /** Call once before a user edit (a drag, a slider gesture, a button). */
   checkpoint(): void {
-    this.undoStack.push(JSON.stringify(this.shapes));
-    if (this.undoStack.length > 200) this.undoStack.shift();
-    this.redoStack = [];
+    this.history.push(this.snapshot(JSON.stringify(this.shapes)));
   }
 
-  undo(): void {
-    const prev = this.undoStack.pop();
-    if (prev === undefined) return;
-    this.redoStack.push(JSON.stringify(this.shapes));
-    this.restore(prev);
-  }
-
-  redo(): void {
-    const next = this.redoStack.pop();
-    if (next === undefined) return;
-    this.undoStack.push(JSON.stringify(this.shapes));
-    this.restore(next);
+  private snapshot(json: string): HistoryEntry {
+    return {
+      apply: () => {
+        const now = JSON.stringify(this.shapes);
+        this.restore(json);
+        return this.snapshot(now);
+      },
+    };
   }
 
   private restore(json: string): void {

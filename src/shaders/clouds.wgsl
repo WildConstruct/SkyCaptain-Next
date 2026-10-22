@@ -62,14 +62,18 @@ fn cloud_density(p: vec3f, with_detail: bool) -> Sample {
   let coverage = clamp(weather.r + params.cloud.x * 2.0 - 1.0, 0.0, 1.0);
   if (coverage <= 0.0) { return s; }
   let kind = clamp(weather.g + params.cloud.y, 0.0, 1.0);
-  let h = (altitude - cloud_bottom()) / cloud_height(kind);
+  // Height scales with local coverage (Schneider 2017): cloud edges are shorter than their
+  // centres, so coverage blobs become domes instead of extruded slabs with flat tops.
+  let h = (altitude - cloud_bottom()) / (cloud_height(kind) * mix(0.3, 1.0, coverage));
   s.h = h;
   if (h >= 1.0) { return s; }
 
   let local = vec3f(p.x + params.wind.x, altitude, p.z + params.wind.y);
   let shape = textureSampleLevel(shape_tex, repeat_sampler, local / params.scale.x, 0.0);
   let low_fbm = dot(shape.gba, vec3f(0.625, 0.25, 0.125));
-  var base = remap(shape.r, low_fbm - 1.0, 1.0, 0.0, 1.0);
+  // Low-frequency Worley dilates the Perlin-Worley into billows. Damped so the result spans
+  // roughly 0.15..0.95 (median ~0.55) and coverage still has something to carve.
+  var base = clamp(remap(shape.r, (low_fbm - 1.0) * 0.35, 1.0, 0.0, 1.0), 0.0, 1.0);
   base *= height_profile(h, kind);
   // Coverage shrinks with height so tops round off; towers narrow more as they rise.
   let tower = clamp((kind - 0.5) * 2.0, 0.0, 1.0);
