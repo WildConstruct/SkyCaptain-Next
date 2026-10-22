@@ -74,7 +74,7 @@ await page.locator('.looks button', { hasText: 'Imported Storm Light' }).waitFor
 // A Lumen preset is refused with a clear message.
 writeFileSync('shots/looks/lumen.wcx', JSON.stringify({ _format: 'wcx', _plugin: 'lumen', params: [] }));
 await page.locator('input[type=file][accept=".wcx"]').setInputFiles('shots/looks/lumen.wcx');
-await page.getByText('lumen preset, not a skyCaptain look').waitFor();
+await page.getByText('lumen preset, not a skyCaptain file').waitFor();
 console.log('import ok; foreign preset refused');
 
 // Sky files are named by Moniker from the composed weather.
