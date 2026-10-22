@@ -1,0 +1,457 @@
+{
+  "version": "1.0.0",
+  "name": "skyCaptain weather regimes",
+  "description": "Example sky graph for skyCaptain: a regime picks shape layers and cloud controls, a time of day picks the sun. Variables follow skyCaptain docs/psg-weather.md.",
+  "metadata": {
+    "author": "skyCaptain",
+    "category": "environment",
+    "type": "SKY_RECIPE",
+    "tags": [
+      "sky",
+      "weather",
+      "clouds",
+      "skycaptain"
+    ]
+  },
+  "nodes": [
+    {
+      "id": "regime",
+      "type": "WeightedChoice",
+      "name": "Weather regime",
+      "x": 0,
+      "y": 0,
+      "options": [
+        {
+          "id": "regime-fair",
+          "text": "fair-weather cumulus drifting across a wide sky",
+          "weight": 12,
+          "meta": {
+            "set": {
+              "clouds.coverage": {
+                "min": 0.45,
+                "max": 0.58
+              },
+              "clouds.type": {
+                "min": -0.15,
+                "max": 0.05
+              },
+              "clouds.background": {
+                "min": 0.7,
+                "max": 1.0
+              },
+              "shape.0.kind": "cumulus_field",
+              "shape.0.azimuth": {
+                "min": -180,
+                "max": 180
+              },
+              "shape.0.distance_km": {
+                "min": 8,
+                "max": 25
+              },
+              "shape.0.size_km": {
+                "min": 20,
+                "max": 35
+              },
+              "shape.0.aspect": {
+                "min": 0.5,
+                "max": 0.9
+              },
+              "shape.0.rotation": {
+                "min": 0,
+                "max": 180
+              },
+              "shape.1.kind": "cumulus_field",
+              "shape.1.azimuth": {
+                "min": -180,
+                "max": 180
+              },
+              "shape.1.distance_km": {
+                "min": 25,
+                "max": 50
+              },
+              "shape.1.size_km": {
+                "min": 15,
+                "max": 30
+              },
+              "shape.1.aspect": {
+                "min": 0.5,
+                "max": 0.9
+              },
+              "shape.1.rotation": {
+                "min": 0,
+                "max": 180
+              }
+            }
+          }
+        },
+        {
+          "id": "regime-storm",
+          "text": "a lone thunderstorm towering over scattered cumulus",
+          "weight": 8,
+          "meta": {
+            "set": {
+              "clouds.coverage": {
+                "min": 0.5,
+                "max": 0.6
+              },
+              "clouds.type": 0,
+              "clouds.background": {
+                "min": 0.3,
+                "max": 0.6
+              },
+              "shape.0.kind": "storm_cell",
+              "shape.0.azimuth": {
+                "min": -60,
+                "max": 60
+              },
+              "shape.0.distance_km": {
+                "min": 18,
+                "max": 35
+              },
+              "shape.0.size_km": {
+                "min": 5,
+                "max": 9
+              },
+              "shape.0.aspect": {
+                "min": 0.7,
+                "max": 1.0
+              },
+              "shape.0.rotation": {
+                "min": 0,
+                "max": 180
+              },
+              "shape.1.kind": "cumulus_field",
+              "shape.1.azimuth": {
+                "min": -180,
+                "max": 180
+              },
+              "shape.1.distance_km": {
+                "min": 5,
+                "max": 20
+              },
+              "shape.1.size_km": {
+                "min": 15,
+                "max": 25
+              },
+              "shape.1.aspect": {
+                "min": 0.6,
+                "max": 1.0
+              },
+              "shape.1.rotation": {
+                "min": 0,
+                "max": 180
+              }
+            }
+          }
+        },
+        {
+          "id": "regime-squall",
+          "text": "a squall line marching in under a darkening sky",
+          "weight": 6,
+          "meta": {
+            "set": {
+              "clouds.coverage": {
+                "min": 0.52,
+                "max": 0.62
+              },
+              "clouds.type": {
+                "min": 0,
+                "max": 0.1
+              },
+              "clouds.background": {
+                "min": 0.2,
+                "max": 0.5
+              },
+              "shape.0.kind": "front",
+              "shape.0.azimuth": {
+                "min": -40,
+                "max": 40
+              },
+              "shape.0.distance_km": {
+                "min": 20,
+                "max": 35
+              },
+              "shape.0.size_km": {
+                "min": 40,
+                "max": 60
+              },
+              "shape.0.aspect": {
+                "min": 0.15,
+                "max": 0.25
+              },
+              "shape.0.rotation": {
+                "min": -20,
+                "max": 20
+              },
+              "shape.1.kind": "storm_cell",
+              "shape.1.azimuth": {
+                "min": -25,
+                "max": 25
+              },
+              "shape.1.distance_km": {
+                "min": 25,
+                "max": 40
+              },
+              "shape.1.size_km": {
+                "min": 5,
+                "max": 8
+              },
+              "shape.1.aspect": 0.9,
+              "shape.1.rotation": 0,
+              "shape.2.kind": "haze_sheet",
+              "shape.2.azimuth": {
+                "min": -30,
+                "max": 30
+              },
+              "shape.2.distance_km": {
+                "min": 40,
+                "max": 60
+              },
+              "shape.2.size_km": {
+                "min": 30,
+                "max": 45
+              },
+              "shape.2.aspect": 0.6,
+              "shape.2.rotation": 0
+            }
+          }
+        },
+        {
+          "id": "regime-clearing",
+          "text": "breaking cloud as the rain clears overhead",
+          "weight": 6,
+          "meta": {
+            "set": {
+              "clouds.coverage": {
+                "min": 0.6,
+                "max": 0.7
+              },
+              "clouds.type": {
+                "min": -0.2,
+                "max": 0
+              },
+              "clouds.background": {
+                "min": 0.9,
+                "max": 1.0
+              },
+              "shape.0.kind": "clear_hole",
+              "shape.0.azimuth": {
+                "min": -180,
+                "max": 180
+              },
+              "shape.0.distance_km": {
+                "min": 0,
+                "max": 6
+              },
+              "shape.0.size_km": {
+                "min": 7,
+                "max": 14
+              },
+              "shape.0.aspect": {
+                "min": 0.6,
+                "max": 1.0
+              },
+              "shape.0.rotation": {
+                "min": 0,
+                "max": 180
+              },
+              "shape.1.kind": "haze_sheet",
+              "shape.1.azimuth": {
+                "min": -180,
+                "max": 180
+              },
+              "shape.1.distance_km": {
+                "min": 30,
+                "max": 50
+              },
+              "shape.1.size_km": {
+                "min": 30,
+                "max": 45
+              },
+              "shape.1.aspect": 0.6,
+              "shape.1.rotation": {
+                "min": 0,
+                "max": 180
+              }
+            }
+          }
+        },
+        {
+          "id": "regime-haze",
+          "text": "thin high haze with a few distant cumulus",
+          "weight": 5,
+          "meta": {
+            "set": {
+              "clouds.coverage": {
+                "min": 0.4,
+                "max": 0.5
+              },
+              "clouds.type": {
+                "min": -0.3,
+                "max": -0.1
+              },
+              "clouds.background": {
+                "min": 0.2,
+                "max": 0.4
+              },
+              "shape.0.kind": "haze_sheet",
+              "shape.0.azimuth": {
+                "min": -180,
+                "max": 180
+              },
+              "shape.0.distance_km": {
+                "min": 0,
+                "max": 15
+              },
+              "shape.0.size_km": {
+                "min": 40,
+                "max": 60
+              },
+              "shape.0.aspect": {
+                "min": 0.6,
+                "max": 1.0
+              },
+              "shape.0.rotation": {
+                "min": 0,
+                "max": 180
+              },
+              "shape.1.kind": "cumulus_field",
+              "shape.1.azimuth": {
+                "min": -180,
+                "max": 180
+              },
+              "shape.1.distance_km": {
+                "min": 40,
+                "max": 70
+              },
+              "shape.1.size_km": {
+                "min": 15,
+                "max": 25
+              },
+              "shape.1.aspect": 0.7,
+              "shape.1.rotation": {
+                "min": 0,
+                "max": 180
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "time_of_day",
+      "type": "WeightedChoice",
+      "name": "Time of day",
+      "x": 0,
+      "y": 220,
+      "options": [
+        {
+          "id": "time-morning",
+          "text": "in clean morning light",
+          "weight": 8,
+          "meta": {
+            "set": {
+              "sky.sun_elevation": {
+                "min": 12,
+                "max": 25
+              },
+              "sky.sun_azimuth": {
+                "min": 60,
+                "max": 120
+              },
+              "sky.haze": {
+                "min": 40,
+                "max": 70
+              }
+            }
+          }
+        },
+        {
+          "id": "time-midday",
+          "text": "under a high midday sun",
+          "weight": 8,
+          "meta": {
+            "set": {
+              "sky.sun_elevation": {
+                "min": 45,
+                "max": 70
+              },
+              "sky.sun_azimuth": {
+                "min": -180,
+                "max": 180
+              },
+              "sky.haze": {
+                "min": 30,
+                "max": 50
+              }
+            }
+          }
+        },
+        {
+          "id": "time-afternoon",
+          "text": "in warm late-afternoon light",
+          "weight": 10,
+          "meta": {
+            "set": {
+              "sky.sun_elevation": {
+                "min": 15,
+                "max": 30
+              },
+              "sky.sun_azimuth": {
+                "min": -120,
+                "max": -60
+              },
+              "sky.haze": {
+                "min": 20,
+                "max": 40
+              }
+            }
+          }
+        },
+        {
+          "id": "time-golden",
+          "text": "at golden hour, sun low on the horizon",
+          "weight": 7,
+          "meta": {
+            "set": {
+              "sky.sun_elevation": {
+                "min": 1.5,
+                "max": 6
+              },
+              "sky.sun_azimuth": {
+                "min": -110,
+                "max": -70
+              },
+              "sky.haze": {
+                "min": 15,
+                "max": 30
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "caption",
+      "type": "Output",
+      "name": "Caption",
+      "x": 420,
+      "y": 110,
+      "data": {
+        "label": "Caption"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-regime",
+      "source": "regime",
+      "target": "caption"
+    },
+    {
+      "id": "e-time",
+      "source": "time_of_day",
+      "target": "caption"
+    }
+  ]
+}

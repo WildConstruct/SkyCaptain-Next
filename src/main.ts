@@ -4,6 +4,8 @@ import { History } from './history';
 import { BRUSH_TOOLS, PaintLayers } from './paint';
 import { Stroke, ToolState } from './ui/tools';
 import { BrushPanel } from './ui/brush-panel';
+import { SkyGraph } from './psg';
+import { PsgPanel } from './ui/psg-panel';
 import { viewUniforms } from './camera';
 import { ShapeKind, ShapeLayer, ShapeStore, createShape } from './shapes';
 import { SkyOverlay } from './ui/sky-overlay';
@@ -147,6 +149,9 @@ async function main(): Promise<void> {
     renderer.update(settings, invalidationFor(key));
   };
 
+  const skyGraph = new SkyGraph(settings, store, set);
+  Object.assign(window, { skyGraph });
+
   const overlay = new SkyOverlay({ canvas: overlayCanvas, settings, store, tools, stroke, setView: set });
 
   const header = document.createElement('div');
@@ -168,6 +173,15 @@ async function main(): Promise<void> {
   mapCanvas.title = 'Weather map. Drag shapes, handles resize and rotate, wheel zooms.';
   panel.append(mapCanvas);
   const minimap = new Minimap(mapCanvas, settings, store, tools, stroke);
+
+  const graphSection = document.createElement('details');
+  graphSection.open = true;
+  const graphSummary = document.createElement('summary');
+  graphSummary.textContent = 'Sky graph';
+  const graphRoot = document.createElement('div');
+  graphSection.append(graphSummary, graphRoot);
+  panel.append(graphSection);
+  new PsgPanel(graphRoot, skyGraph, store);
 
   const toolsSection = document.createElement('details');
   toolsSection.open = true;
@@ -229,6 +243,8 @@ async function main(): Promise<void> {
     } else if (mod && e.key.toLowerCase() === 'y') {
       e.preventDefault();
       history.redo();
+    } else if (!mod && e.key.toLowerCase() === 'r' && skyGraph.loaded) {
+      skyGraph.reroll().catch((err) => console.error(err));
     } else if (!mod && e.key.toLowerCase() === 'v') {
       tools.setMode('shapes');
     } else if (!mod && /^[1-6]$/.test(e.key)) {

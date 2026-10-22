@@ -20,15 +20,20 @@ ignored, so a graph can also carry notes for other tools.
 | `sky.sun_elevation`, `sky.sun_azimuth` | degrees |
 | `sky.haze` | clarity distance, km |
 | `clouds.coverage`, `clouds.type`, `clouds.density`, `clouds.erosion` | global cloud controls (same ranges as the sliders) |
-| `clouds.base_km`, `clouds.thickness_km` | cloud layer |
+| `clouds.background` | strength of the procedural background weather, 0..1 |
+| `clouds.base_km`, `clouds.thickness_km` | cloud base and cumulus height |
 | `clouds.wind_dir`, `clouds.wind_km` | drift direction (degrees) and distance |
 | `shape.N.kind` | `cumulus_field`, `storm_cell`, `front`, `clear_hole`, `haze_sheet` |
 | `shape.N.azimuth`, `shape.N.distance_km` | where the shape sits, seen from the eye |
-| `shape.N.size_km`, `shape.N.rotation`, `shape.N.strength` | extent, orientation (degrees), 0–1 influence |
+| `shape.N.size_km`, `shape.N.aspect`, `shape.N.rotation`, `shape.N.strength` | half-length, width/length, orientation (degrees), 0–1 influence |
 | `shape.N.type` | optional per-shape cloud type override |
+| `shape.N.seed` | optional detail seed (otherwise derived from the roll seed) |
 
 `N` runs from 0 to 7. The prose `output` becomes the sky's caption, a readable
 description that can also feed Ethera or an image prompt.
+
+Implemented in `src/psg.ts` (driver) and `src/ui/psg-panel.ts` (load, reroll with R,
+holds). A held shape layer is locked as it currently is, including hand edits.
 
 Typical graph structure:
 - A Weighted Choice picks a weather regime, for example "fair-weather cumulus",
@@ -52,10 +57,25 @@ The sky recipe stores the graph's `graphSha256`, the seed, the locks and the
 resolved variables. Reopening a recipe uses the stored values, so editing the
 graph never silently changes a saved sky.
 
+## Example
+
+`examples/weather-regimes.psg` has two Weighted Choices. **Weather regime** picks one of five
+regimes (fair cumulus, lone thunderstorm, squall line, clearing, high haze), and each
+option's `meta.set` assigns its shapes and cloud controls as ranges. **Time of day** picks
+the sun. Both feed the Output, so the caption reads like "a squall line marching in under
+a darkening sky at golden hour, sun low on the horizon". Load it with **Example graph** in
+the Sky graph panel, or open it in Prompt Spaghetti to edit.
+
 ## Packaging
 
-`evaluatePsg` is dependency-light. Its only Node-specific import is `crypto`
-(for the sha256). Bundle it for the browser with esbuild, swapping `crypto` for a
-small synchronous sha256, and vendor the bundle with its own sha256. This mirrors
-how era-crowd vendors `psg-eval.cjs`. The build script belongs in
-prompt-spaghetti-desktop next to `build-psg-eval.mjs`.
+`vendor/psg-eval.browser.js` is `evaluatePsg` bundled for the browser by
+`node tools/build-psg-eval.mjs <prompt-spaghetti-desktop checkout>`. The script needs
+only `zod` and `seedrandom`, both resolved from this repo's devDependencies. Node's
+`crypto` is swapped for `tools/shims/crypto.js`, a small synchronous sha256. The
+bundle's banner names the PSG commit it was built from, and its sha256 sits next to it.
+This mirrors how era-crowd vendors `psg-eval.cjs`.
+
+`node tools/check-psg-bundle.mjs <checkout>` runs the browser bundle against a Node build
+of the same source, using real `crypto`, over library graphs and the example. Results
+must be identical, including `graphSha256`. Rebuild the bundle and rerun the check
+whenever PSG's evaluator changes.

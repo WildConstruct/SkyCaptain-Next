@@ -38,6 +38,8 @@ export interface ShapeLayer {
   type: number | null;
   seed: number;
   visible: boolean;
+  /** Set when a sky graph (PSG) produced this layer: its shape.N slot. Rerolls replace these. */
+  psgSlot?: number;
 }
 
 let nextId = 1;
@@ -182,6 +184,13 @@ export class ShapeStore {
     this.checkpoint();
     this.shapes = this.shapes.filter((s) => s.id !== id);
     if (this.selected === id) this.selected = null;
+    this.emit();
+  }
+
+  /** Replaces every layer (callers checkpoint first). Keeps the selection if it survives. */
+  replaceAll(shapes: ShapeLayer[]): void {
+    this.shapes = shapes;
+    if (!this.current) this.selected = null;
     this.emit();
   }
 

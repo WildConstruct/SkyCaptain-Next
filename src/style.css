@@ -71,3 +71,10 @@ button:hover, select:hover { border-color: var(--accent); }
 .tools button.active { background: #2b4a75; border-color: var(--accent); }
 .brush-options { margin: 6px 0; }
 .check { display: flex; align-items: center; gap: 6px; margin: 6px 0; color: var(--muted); }
+
+.caption { font-style: italic; color: var(--text); margin: 8px 0 4px; }
+.hint { color: var(--muted); margin: 6px 0; }
+.error-text { color: #ff8a80; margin: 6px 0; }
+.holds li { grid-template-columns: auto 1fr; cursor: default; }
+.holds li.held span { color: var(--text); }
+.holds li span { color: var(--muted); }

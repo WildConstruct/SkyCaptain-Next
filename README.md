@@ -83,6 +83,17 @@ Space-drag looks around. `[` and `]` change brush size. Shapes and paint share o
 undo history; paint undo stores only the 64×64 tiles a stroke touched.
 `node tools/smoke-paint.mjs` checks each brush against the GPU weather map.
 
+## Sky graphs (Prompt Spaghetti)
+
+![PSG-rolled skies](docs/look/psg-001.png)
+
+A `.psg` graph rolls whole skies: shapes, cloud controls, sun and a caption. Load
+`examples/weather-regimes.psg` with **Example graph**, press **R** to reroll, and hold
+choices, shape slots or the sun so they survive rerolls. Graph-made shapes sit below
+your hand-made ones; rerolls never touch hand-made shapes or paint. Details in
+[docs/psg-weather.md](docs/psg-weather.md). `node tools/smoke-psg.mjs` checks load,
+reroll, holds and undo.
+
 ## Roadmap
 
 1. **Look spike.** Done.
@@ -90,8 +101,8 @@ undo history; paint undo stores only the 64×64 tiles a stroke touched.
 3. **Speed.** Measure on M1 and 4090. Tune steps, empty-space skipping and tiers.
    Target: a visible draft in one frame and convergence in about 1 s on M1 Laptop tier.
 4. **Painting.** Done: six brushes, sky and minimap painting, shared undo.
-5. **PSG weather.** Prompt Spaghetti graphs drive shape layers and sky settings,
-   with reroll and locks; see [docs/psg-weather.md](docs/psg-weather.md).
+5. **PSG weather.** Done: a vendored browser build of Prompt Spaghetti's evaluator,
+   an example graph, reroll and holds.
 6. **Look polish.** Cumulonimbus anvils, ground shadows from clouds, horizon and
    ground model, edge albedo instead of powder.
 7. **Vibes and export.** Look presets (sun + atmosphere + clouds), lat-long
