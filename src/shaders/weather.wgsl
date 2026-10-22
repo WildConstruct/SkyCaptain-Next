@@ -1,6 +1,13 @@
 // Weather map: procedural background, then shape layers in order, then paint.
 // The map covers a fixed square of side params.scale.z km centred on the eye (no tiling).
-// r = coverage, g = cloud type (0 stratus .. 1 towering), b = density multiplier.
+// r = local weather, g = cloud type (0 stratus .. 1 towering), b = density multiplier,
+// a = how much global coverage may act here (0 where Clear or a clear hole forced clear sky).
+//
+// Local weather feeds Takram's coverage function (clouds.wgsl), which turns smooth bumps
+// into domed clouds and flat plateaus into flat-topped walls. So nothing writes plateaus:
+// shapes and paint author an *amount* of cloud, and that amount scales a field of Worley
+// cells (one soft bump per cloud), as Takram's own local weather texture does. Sheets
+// (haze) are the exception and stay flat on purpose.
 // The smudge warp displaces where the whole composite is evaluated, so it drags
 // background, shapes and paint together.
 
@@ -60,9 +67,55 @@ fn shape_noise(xz: vec2f, feature_km: f32, seed: f32) -> f32 {
 }
 
 struct Cell {
-  coverage: f32,
+  amount: f32,   // authored cloud amount, scales the cell field
+  sheet: f32,    // authored flat layer (haze), not broken into cells
+  clear: f32,    // forced clear sky, which also holds off the global coverage
   kind: f32,
   density: f32,
+}
+
+// Takram localWeather.frag: Worley fBm with squared-distance cells, 1 at feature points.
+fn cell_noise(p: vec2f, seed: u32) -> f32 {
+  let i = vec2i(floor(p));
+  let f = p - floor(p);
+  var d = 1e9;
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      let o = vec2i(x, y);
+      let feature = hash33(bitcast<vec3u>(vec3i(i + o, i32(seed)))).xy + vec2f(o);
+      let delta = feature - f;
+      d = min(d, dot(delta, delta));
+    }
+  }
+  return 1.0 - clamp(d, 0.0, 1.0);
+}
+
+fn cell_fbm(p: vec2f, frequency: f32, seed: u32) -> f32 {
+  var noise = 0.0;
+  var amplitude = 0.4;
+  var freq = frequency;
+  for (var i = 0u; i < 4u; i++) {
+    noise += amplitude * cell_noise(p * freq, seed + i * 101u);
+    freq *= 2.0;
+    amplitude *= 0.95;
+  }
+  return noise;
+}
+
+// Takram's low and mid cloud weather over a 100 km tile, as our background.
+const WEATHER_TILE_KM = 100.0;
+fn takram_background(xz: vec2f, seed: u32) -> vec2f {
+  let p = xz / WEATHER_TILE_KM;
+  let mid = smoothstep(1.0, 1.4, cell_fbm(p + 0.5, 8.0, seed + 7u));
+  let low = clamp(smoothstep(0.8, 1.4, cell_fbm(p, 16.0, seed)) - mid, 0.0, 1.0);
+  return vec2f(low, mid);
+}
+
+// Where clouds may form inside an authored area: soft bumps ~3 km apart with real gaps.
+// The fBm's median is ~1.17; this window leaves about a quarter of the area empty and
+// puts the median at ~0.3, so each cell domes on its own instead of merging into a slab.
+fn authored_cells(xz: vec2f, seed: u32) -> f32 {
+  return smoothstep(1.05, 1.4, cell_fbm(xz / WEATHER_TILE_KM, 24.0, seed + 31u));
 }
 
 struct Local {
@@ -95,41 +148,43 @@ fn apply_shape(cell: Cell, shape: Shape, xz: vec2f) -> Cell {
   // Soft-edged footprint: full inside, fading over the outer third.
   let w = shape.strength * (1.0 - smoothstep(0.65, 1.0, l.d));
   var out = cell;
-  var cov = 0.0;
+  var amount = 0.0;
+  var sheet = 0.0;
   var kind = 0.5;
   var dens = 1.0;
 
   if (shape.kind == SHAPE_CLEAR_HOLE) {
-    out.coverage = cell.coverage * (1.0 - w);
+    out.amount = cell.amount * (1.0 - w);
+    out.sheet = cell.sheet * (1.0 - w);
+    out.clear = max(cell.clear, w);
     return out;
   } else if (shape.kind == SHAPE_CUMULUS_FIELD) {
-    // Separate fair-weather cumulus islands rather than one blob.
-    cov = w * smoothstep(0.42, 0.62, shape_noise(xz, 5.0, shape.seed));
+    amount = w * mix(0.75, 1.0, shape_noise(xz, 12.0, shape.seed));
     kind = mix(0.3, 0.55, shape_noise(xz, 9.0, shape.seed + 3.0));
     dens = 0.9;
   } else if (shape.kind == SHAPE_STORM_CELL) {
-    // Towering core plus a broken ring of outflow cumulus.
-    // Dome-shaped coverage: dense centre falling to the edge, so the tower has a rounded,
-    // billowed silhouette instead of an extruded footprint.
-    let core = shape.strength * (1.0 - smoothstep(0.25, 1.0, l.d)) * mix(0.8, 1.0, shape_noise(xz, 3.0, shape.seed));
-    let ring = shape.strength * exp(-pow((l.d - 1.25) / 0.22, 2.0)) * smoothstep(0.45, 0.65, shape_noise(xz, 3.5, shape.seed + 5.0));
-    cov = max(core, ring);
-    kind = mix(0.5, 1.0, smoothstep(0.0, 0.6, core));
+    // A peaked core (a cluster of towers, tallest in the middle) and a broken ring of
+    // outflow cumulus.
+    let core = shape.strength * clamp(1.0 - l.d * l.d, 0.0, 1.0);
+    let ring = shape.strength * exp(-pow((l.d - 1.25) / 0.22, 2.0)) * 0.7;
+    amount = max(core, ring);
+    kind = mix(0.5, 1.0, smoothstep(0.0, 0.7, core));
     dens = 1.0;
   } else if (shape.kind == SHAPE_FRONT) {
     // Band of cloud: convective towers on the leading edge, stratiform behind.
-    cov = w * smoothstep(0.3, 0.55, shape_noise(xz, 6.0, shape.seed));
+    amount = w * mix(0.7, 1.0, shape_noise(xz, 10.0, shape.seed));
     kind = mix(0.2, 0.85, smoothstep(-0.6, 0.6, l.across));
     dens = 0.95;
   } else if (shape.kind == SHAPE_HAZE_SHEET) {
-    cov = w * mix(0.55, 0.75, shape_noise(xz, 12.0, shape.seed));
+    sheet = w * mix(0.55, 0.75, shape_noise(xz, 12.0, shape.seed));
     kind = 0.05;
     dens = 0.35;
   }
   if (shape.type_override >= 0.0) { kind = shape.type_override; }
 
-  out.coverage = max(cell.coverage, cov);
-  let blend = clamp(cov * 1.5, 0.0, 1.0);
+  out.amount = max(cell.amount, amount);
+  out.sheet = max(cell.sheet, sheet);
+  let blend = clamp(max(amount, sheet) * 1.5, 0.0, 1.0);
   out.kind = mix(cell.kind, kind, blend);
   out.density = mix(cell.density, dens, blend);
   return out;
@@ -146,21 +201,32 @@ fn generate(@builtin(global_invocation_id) id: vec3u) {
   let uv = xz / extent + 0.5;
   let seed = params.misc.z;
 
-  // Background weather: ~15 km coverage features regardless of map extent.
-  let freq = max(1, i32(round(extent / 60.0)));
+  let seed_u = u32(seed * 7919.0);
+
+  // Background weather: Takram's local weather generator (low and mid cumulus cells).
+  let bg = takram_background(xz, seed_u);
+  let background = max(bg.x, bg.y) * shapes.base_amount;
   var cell: Cell;
-  cell.coverage = smoothstep(0.4, 0.75, weather_fbm(uv, freq * 4, seed)) * shapes.base_amount;
-  // Background stays at or below cumulus congestus; towers come from shapes or the type control.
-  cell.kind = smoothstep(0.3, 0.7, weather_fbm(uv, freq * 2, seed + 11.0)) * 0.6;
-  cell.density = mix(0.6, 1.0, weather_fbm(uv, freq * 8, seed + 23.0));
+  cell.amount = 0.0;
+  cell.sheet = 0.0;
+  cell.clear = 0.0;
+  // Mid cells are taller; background stays at or below cumulus congestus.
+  cell.kind = mix(0.3, 0.55, bg.y / max(bg.x + bg.y, 1e-3)) * step(1e-3, bg.x + bg.y);
+  cell.density = mix(0.6, 1.0, weather_fbm(uv, max(1, i32(round(extent / 60.0))) * 8, seed + 23.0));
 
   for (var i = 0u; i < min(shapes.count, 16u); i++) {
     cell = apply_shape(cell, shapes.items[i], xz);
   }
 
+  // Paint: Cloud adds amount, Clear removes it and forces clear sky (paint.r < 0).
   let paint = textureSampleLevel(paint_tex, layer_sampler, uv, 0.0);
-  cell.coverage = clamp(cell.coverage + paint.r, 0.0, 1.0);
+  cell.amount = clamp(cell.amount + paint.r, 0.0, 1.0);
+  cell.sheet = clamp(cell.sheet + min(paint.r, 0.0), 0.0, 1.0);
+  cell.clear = clamp(max(cell.clear, -paint.r), 0.0, 1.0);
   cell.kind = mix(cell.kind, paint.g, clamp(paint.b, 0.0, 1.0));
   cell.density = clamp(cell.density + paint.a, 0.05, 1.0);
-  textureStore(weather_out, id.xy, vec4f(cell.coverage, cell.kind, cell.density, 1.0));
+
+  let open = 1.0 - cell.clear;
+  let local_weather = max(max(background * open, cell.amount * authored_cells(xz, seed_u)), cell.sheet);
+  textureStore(weather_out, id.xy, vec4f(local_weather, cell.kind, cell.density, open));
 }

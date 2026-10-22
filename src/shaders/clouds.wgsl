@@ -36,6 +36,8 @@ fn cumulus_height() -> f32 { return params.scale.w; }
 // in place of their beer shadow map, the sky cube in place of precomputed irradiance)
 // it is marked "skyCaptain:". docs/takram-port.md lists every difference.
 const COVERAGE_FILTER_WIDTH: f32 = 0.6;
+// skyCaptain: coverage that full-strength local weather reaches (see sample_weather).
+const AUTHORED_COVERAGE: f32 = 0.6;
 const SHAPE_ALTERING_BIAS: f32 = 0.35;
 const WEATHER_EXPONENT: f32 = 1.0;
 const SHAPE_AMOUNT: f32 = 1.0;
@@ -103,9 +105,11 @@ fn sample_weather(p: vec3f, altitude: f32) -> Weather {
   if (w.hf >= 1.0) { return w; }
   let local_weather = pow(tex.r, WEATHER_EXPONENT);
   // skyCaptain: Takram's coverage is one global number, and below ~0.6 it erodes everything
-  // above a low dome, so a painted storm would never stand up. What the artist authored
-  // raises coverage locally; where nothing is authored the global coverage rules as upstream.
-  let coverage = max(params.cloud.x, local_weather);
+  // above a low dome, so a painted storm would never stand up. Strong local weather raises
+  // coverage locally, up to AUTHORED_COVERAGE: the most at which shape noise still carves
+  // (density stays below 1), so authored clouds never set solid. Clear and clear holes
+  // hold the global coverage off (weather alpha).
+  let coverage = max(params.cloud.x * tex.a, AUTHORED_COVERAGE * local_weather);
   let factor = 1.0 - coverage * shape_altering(w.hf, kind);
   w.density = remap_clamped(mix(local_weather, 1.0, COVERAGE_FILTER_WIDTH), factor, factor + COVERAGE_FILTER_WIDTH);
   w.scale = tex.b;
