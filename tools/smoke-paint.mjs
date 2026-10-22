@@ -27,6 +27,7 @@ const weatherAt = (points) => page.evaluate(async (points) => {
   });
 }, points);
 
+await page.locator('.minimap').scrollIntoViewIfNeeded();
 const map = await page.locator('.minimap').boundingBox();
 const toPx = (x, z) => [map.x + map.width / 2 + (x / 90) * (map.width / 2), map.y + map.height / 2 - (z / 90) * (map.height / 2)];
 async function strokeOnMap(from, to, steps = 12) {

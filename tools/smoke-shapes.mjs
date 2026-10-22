@@ -21,6 +21,7 @@ assert.ok(storm.z > 0 && Math.abs(storm.x) < 1, `placed ahead: ${storm.x}, ${sto
 console.log('add: storm at', storm.x.toFixed(1), storm.z.toFixed(1));
 
 // Minimap geometry: radius 90 km mapped onto the canvas.
+await page.locator('.minimap').scrollIntoViewIfNeeded();
 const map = await page.locator('.minimap').boundingBox();
 const toPx = (x, z) => [map.x + map.width / 2 + (x / 90) * (map.width / 2), map.y + map.height / 2 - (z / 90) * (map.height / 2)];
 
