@@ -19,7 +19,7 @@ Noun: **Sky**. Max tokens: 3. Order: mood → wind → texture → density → c
 | mood | 5 | mood (brooding = density ≥ 270 and ambient ≤ 0.75; soft = ambient ≥ 1.25 and powder ≤ 0.5; luminous = silver lining ≥ 0.86 and density < 270) | none: (nothing); brooding: **Brooding**; soft: **Soft**; luminous: **Luminous** |
 | wind | 2 | windKm (drift distance, √(driftX² + driftZ²) km) | 0 to 12: (nothing); 12 to 1000: **Windswept** |
 | texture | 1 | erosion | 0 to 0.4: **Smooth**; 0.4 to 1.4: (nothing); 1.4 to 2: **Ragged** |
-| density | 2 | density | 0 to 100: **Wispy**; 100 to 300: (nothing); 300 to 530: **Dense**; 530 to 1000: **Heavy** |
+| density | 2 | density | 0 to 25: **Wispy**; 25 to 300: (nothing); 300 to 530: **Dense**; 530 to 1000: **Heavy** |
 | cover | 4 | coverage | 0 to 0.1: **Clear**; 0.1 to 0.2: **Fair**; 0.2 to 0.35: (nothing); 0.35 to 0.55: **Broken**; 0.55 to 1: **Overcast** |
 | clarity | 3 | haze | 0 to 12: **Milky**; 12 to 22: **Hazy**; 22 to 60: (nothing); 60 to 1000: **Crisp** |
 | sun | 1 | sunIntensity | 0 to 9: **Dim**; 9 to 40: (nothing); 40 to 1000: **Blazing** |

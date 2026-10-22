@@ -98,13 +98,13 @@
         {
           "range": [
             0,
-            100
+            25
           ],
           "token": "Wispy"
         },
         {
           "range": [
-            100,
+            25,
             300
           ],
           "token": null

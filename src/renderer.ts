@@ -332,15 +332,13 @@ export class Renderer {
       this.flushPending(prep);
       d.queue.submit([prep.finish()]);
 
-      // The export cube starts empty, so its ground starts from the view's downwelling light
-      // and then follows its own cube frame by frame.
-      const seed = d.createCommandEncoder();
-      seed.copyBufferToBuffer(this.downwellingBuffer, 0, downwelling, 0, 16);
-      d.queue.submit([seed.finish()]);
+      // The export's ground light comes only from its own cube (nothing from the view), so a
+      // frame renders the same whatever the view shows. The ground skips the first pass (made
+      // before any light was integrated), so an export always renders at least two passes.
       const bindGroup = this.cloudBindGroupFor(params, accum, cube, this.cloudPipeline, downwelling);
       const downwellingGroup = this.downwellingBindGroupFor(cube, downwelling);
       const groups = Math.ceil(face / 4 / 8);
-      const total = 16 * samples;
+      const total = 16 * Math.max(2, samples);
       for (let frame = 0; frame < total; frame++) {
         d.queue.writeBuffer(params, 0, packParams(this.settings, frame, quality));
         const encoder = d.createCommandEncoder({ label: 'export clouds' });
