@@ -144,7 +144,7 @@ fn multiscatter(@builtin(global_invocation_id) id: vec3u) {
 fn sky_radiance(dir: vec3f) -> vec3f {
   let sun = params.sun_dir.xyz;
   let illum = params.sun_color.rgb * params.sun_dir.w;
-  let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
+  let origin = vec3f(0.0, ground_radius() + eye_altitude(params.anim.y), 0.0);
   let extent = march_extent(origin, dir);
   let steps = 32;
   let cos_theta = dot(dir, sun);

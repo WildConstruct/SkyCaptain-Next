@@ -80,6 +80,12 @@ const GROUPS: { title: string; expert?: boolean; sliders: SliderSpec[] }[] = [
     ],
   },
   {
+    title: 'Eye',
+    sliders: [
+      { key: 'eyeAltitude', label: 'Elevation', min: 0, max: 20, step: 0.01, unit: 'km' },
+    ],
+  },
+  {
     title: 'View (preview only)',
     sliders: [
       { key: 'ev', label: 'Exposure', min: -8, max: 8, step: 0.05, unit: 'EV' },

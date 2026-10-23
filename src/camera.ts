@@ -1,12 +1,15 @@
-// The fixed-eye view: camera basis, projection, and mapping between view directions and
-// weather-map positions on the cloud base. Must agree with display.wgsl and clouds.wgsl.
+// The fixed-eye view (on the ground or raised by Elevation): camera basis, projection, and
+// mapping between view directions and weather-map positions on the cloud base. Must agree with display.wgsl and clouds.wgsl.
 
 import type { Settings } from './settings';
 
 export type Vec3 = [number, number, number];
 
 const EARTH_RADIUS_KM = 6360;
-const EYE_ALTITUDE_KM = 0.002;
+/** The eye is 2 m up unless raised (must match eye_altitude() in common.wgsl). */
+export function eyeAltitude(s: Settings): number {
+  return Math.max(s.eyeAltitude, 0.002);
+}
 
 export interface Basis {
   right: Vec3;
@@ -56,13 +59,20 @@ export function project(s: Settings, aspect: number, dir: Vec3): [number, number
   return [dot(dir, b.right) / (z * b.tanHalf * aspect), dot(dir, b.up) / (z * b.tanHalf)];
 }
 
-/** Weather-map position (km) where a view direction meets the cloud base, or null below the horizon. */
+/**
+ * Weather-map position (km) where a view direction meets the cloud base, or null when it
+ * does not: below the horizon from under the clouds, above it from over them.
+ */
 export function mapPointFromDir(s: Settings, dir: Vec3): [number, number] | null {
-  if (dir[1] <= 0.002) return null;
   const radius = EARTH_RADIUS_KM + s.cloudBottom;
-  const oy = EARTH_RADIUS_KM + EYE_ALTITUDE_KM;
+  const oy = EARTH_RADIUS_KM + eyeAltitude(s);
   const b = oy * dir[1];
-  const t = -b + Math.sqrt(b * b - (oy * oy - radius * radius));
+  const disc = b * b - (oy * oy - radius * radius);
+  if (disc < 0) return null;
+  // From below the base the ray leaves the base sphere (far root); from above it enters
+  // it (near root), which must be ahead of the eye.
+  const t = oy < radius ? -b + Math.sqrt(disc) : -b - Math.sqrt(disc);
+  if (t <= 0 || (oy < radius && dir[1] <= 0.002)) return null;
   // Weather is sampled at (world xz + wind), so map space is offset by the drift.
   return [dir[0] * t + s.windX, dir[2] * t + s.windZ];
 }
@@ -72,6 +82,6 @@ export function dirFromMapPoint(s: Settings, x: number, z: number): Vec3 {
   const wx = x - s.windX;
   const wz = z - s.windZ;
   const radius = EARTH_RADIUS_KM + s.cloudBottom;
-  const y = Math.sqrt(Math.max(0, radius * radius - wx * wx - wz * wz)) - (EARTH_RADIUS_KM + EYE_ALTITUDE_KM);
+  const y = Math.sqrt(Math.max(0, radius * radius - wx * wx - wz * wz)) - (EARTH_RADIUS_KM + eyeAltitude(s));
   return normalize([wx, y, wz]);
 }

@@ -26,6 +26,7 @@ const BAYER_OFFSETS = array<vec2u, 16>(
 );
 
 fn ground_radius() -> f32 { return params.layer.z; }
+fn eye() -> vec3f { return vec3f(0.0, ground_radius() + eye_altitude(params.anim.y), 0.0); }
 fn cloud_bottom() -> f32 { return params.layer.x; }
 // Top of the march shell: the tallest tower possible.
 fn cloud_top() -> f32 { return params.layer.y; }
@@ -102,7 +103,9 @@ fn sample_weather(p: vec3f, altitude: f32) -> Weather {
   w.scale = 0.0;
   if (altitude <= cloud_bottom() || altitude >= cloud_top()) { return w; }
   // skyCaptain: the local weather is our authored map (background, shapes, paint).
-  let tex = textureSampleLevel(weather_tex, clamp_sampler, (p.xz + params.wind.xy) / params.scale.z + 0.5, 0.0);
+  // skyCaptain: repeat past the map's edge rather than stretch its edge texels; from altitude
+  // the horizon is far beyond the map.
+  let tex = textureSampleLevel(weather_tex, repeat_sampler, (p.xz + params.wind.xy) / params.scale.z + 0.5, 0.0);
   let kind = clamp(tex.g + params.cloud.y, 0.0, 1.0);
   w.hf = (altitude - cloud_bottom()) / cloud_height(kind);
   if (w.hf >= 1.0) { return w; }
@@ -250,6 +253,7 @@ fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
 // many steps instead of per ground sample. Smooth, and cheap per frame.
 const GROUND_SHADOW_KM: f32 = 12.0;
 const GROUND_SHADOW_STEPS: i32 = 96;
+const DISTANT_SHADOW_STEPS: i32 = 24;
 
 fn transmittance_lut_at(r: f32, mu: f32) -> vec3f {
   let uv = vec2f(mu * 0.5 + 0.5, clamp((r - ground_radius()) / (params.layer.w - ground_radius()), 0.0, 1.0));
@@ -292,8 +296,8 @@ fn ground_shadow(@builtin(global_invocation_id) id: vec3u) {
 }
 
 fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
-  let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
-  let t_ground = ray_sphere(origin, dir, ground_radius()).x;
+  let origin = eye();
+  let t_ground = ground_hit(length(origin), dir, ground_radius());
   if (t_ground <= 0.0) { return vec3f(0.0); }
   let g = origin + dir * t_ground;
   let n = normalize(g);
@@ -303,11 +307,16 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
   let cos_sun = dot(n, sun);
   var direct = vec3f(0.0);
   if (cos_sun > 0.0) {
-    let shadow = textureSampleLevel(shadow_tex, clamp_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0).r;
+    var shadow = textureSampleLevel(shadow_tex, clamp_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0).r;
+    // skyCaptain: from altitude the ground reaches far past the shadow map; march the
+    // cloud shadow there directly (coarser, but only for distant ground).
+    if (any(abs(g.xz) > vec2f(GROUND_SHADOW_KM * 0.5))) {
+      shadow = exp(-layer_optical_depth(g, sun, DISTANT_SHADOW_STEPS, jitter.x));
+    }
     direct = illum * transmittance_lut_at(length(g), cos_sun) * cos_sun * shadow;
   }
   // Air between the eye and the ground point.
-  let uvs = ground_air_uvs(dir, ground_radius(), params.layer.w);
+  let uvs = ground_air_uvs(dir, ground_radius(), params.layer.w, eye_altitude(params.anim.y));
   let air = clamp(
     textureSampleLevel(transmittance_lut, clamp_sampler, uvs.xy, 0.0).rgb
       / max(textureSampleLevel(transmittance_lut, clamp_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
@@ -320,19 +329,24 @@ struct MarchResult {
   transmittance: f32,
 }
 
+// The view from the eye along dir: clouds, then the ground behind them (seen through what
+// the clouds let through). Sky and air are added at composite time.
 fn march(dir: vec3f, seed: vec3u) -> MarchResult {
+  let origin = eye();
+  var result = march_clouds(origin, dir, shell_interval(origin, dir), seed);
+  if (ground_hit(length(origin), dir, ground_radius()) > 0.0) {
+    result.scatter += ground_radiance(dir, hash33(seed + vec3u(0u, 0u, 4242u))) * result.transmittance;
+  }
+  return result;
+}
+
+fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchResult {
   var result: MarchResult;
   result.scatter = vec3f(0.0);
   result.transmittance = 1.0;
-  if (dir.y <= 0.0) {
-    result.scatter = ground_radiance(dir, hash33(seed + vec3u(0u, 0u, 4242u)));
-    return result;
-  }
-
-  let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
-  let t_near = ray_sphere(origin, dir, ground_radius() + cloud_bottom()).y;
-  let t_far = min(ray_sphere(origin, dir, ground_radius() + cloud_top()).y, MAX_RAY_KM);
-  if (t_near <= 0.0 || t_far <= t_near) { return result; }
+  let t_near = span.x;
+  let t_far = min(span.y, t_near + MAX_RAY_KM);
+  if (span.y <= 0.0 || t_far <= t_near) { return result; }
 
   let sun = params.sun_dir.xyz;
   let cos_theta = dot(dir, sun);
@@ -352,7 +366,7 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   let sky_light = sky_hemisphere * 0.5;
   // Ground irradiance: horizontal sky irradiance plus the sun through the clear fraction.
   let ground_sky_irradiance = PI * (sky_top * 0.5 + sky_side * 0.5);
-  let ground_sun_irradiance = illum * sun_transmittance(origin) * max(sun.y, 0.0);
+  let ground_sun_irradiance = illum * sun_transmittance(vec3f(0.0, ground_radius() + 0.002, 0.0)) * max(sun.y, 0.0);
   let ground_radiance = params.misc.y / PI * (ground_sky_irradiance + (1.0 - coverage) * ground_sun_irradiance);
 
   let max_iterations = i32(params.march.x);
@@ -505,16 +519,20 @@ fn shell_interval(o: vec3f, dir: vec3f) -> vec2f {
   let r_top = ground_radius() + cloud_top();
   let top = ray_sphere(o, dir, r_top);
   if (top.y <= 0.0) { return vec2f(-1.0); }
-  let r = length(o);
+  // skyCaptain: the eye can be below, inside or above the layer (Elevation). Start where the
+  // ray is first inside the top sphere and outside the bottom one; stop at the bottom sphere
+  // or the top, and never past the ground. (A ray grazing the bottom sphere from above can
+  // re-enter the layer beyond it; that far piece is dropped.)
+  var t0 = max(top.x, 0.0);
+  var t1 = top.y;
   let bottom = ray_sphere(o, dir, r_bottom);
-  if (r < r_bottom) {
-    // Below the shell: enter at the bottom sphere going up.
-    if (bottom.y <= 0.0) { return vec2f(-1.0); }
-    return vec2f(bottom.y, top.y);
+  if (bottom.y > 0.0) {
+    if (bottom.x <= t0) { t0 = max(t0, bottom.y); } else { t1 = min(t1, bottom.x); }
   }
-  // Inside the shell: leave through the bottom if the ray dips into it, else the top.
-  if (bottom.x > 0.0) { return vec2f(0.0, bottom.x); }
-  return vec2f(0.0, top.y);
+  let ground = ground_hit(length(o), dir, ground_radius());
+  if (ground > 0.0) { t1 = min(t1, ground); }
+  if (t1 <= t0) { return vec2f(-1.0); }
+  return vec2f(t0, t1);
 }
 
 struct Collision {
@@ -582,16 +600,17 @@ fn sample_phase(wo: vec3f, rng: ptr<function, Rng>) -> vec3f {
 }
 
 fn reference_path(dir0: vec3f, rng: ptr<function, Rng>) -> vec4f {
-  let origin = vec3f(0.0, ground_radius() + 0.002, 0.0);
-  if (dir0.y <= 0.0) {
-    // The ground uses the same analytic shading as the fast renderer.
-    return vec4f(ground_radiance(dir0, vec3f(rng_next(rng), rng_next(rng), rng_next(rng))), 1.0);
+  let origin = eye();
+  // The ground uses the same analytic shading as the fast renderer.
+  var ground = vec3f(0.0);
+  if (ground_hit(length(origin), dir0, ground_radius()) > 0.0) {
+    ground = ground_radiance(dir0, vec3f(rng_next(rng), rng_next(rng), rng_next(rng)));
   }
   let span0 = shell_interval(origin, dir0);
-  if (span0.y <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  if (span0.y <= 0.0) { return vec4f(ground, 1.0); }
   let majorant = max(params.cloud.z, 1e-3);
-  let first = delta_track(origin, dir0, span0.x, min(span0.y, MAX_RAY_KM), majorant, rng);
-  if (!first.hit) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  let first = delta_track(origin, dir0, span0.x, min(span0.y, span0.x + MAX_RAY_KM), majorant, rng);
+  if (!first.hit) { return vec4f(ground, 1.0); }
 
   let sun = params.sun_dir.xyz;
   let illum = params.sun_color.rgb * params.sun_dir.w;

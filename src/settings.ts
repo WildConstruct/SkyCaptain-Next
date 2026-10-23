@@ -48,6 +48,8 @@ export interface Settings {
   seed: number;
   /** Upward scroll of the cloud shape noise, km: clouds grow and dissolve as it rises (animation). */
   evolve: number;
+  /** Eye height above the ground, km: from standing on the ground to above the clouds. */
+  eyeAltitude: number;
   ev: number;
   fov: number;
   yaw: number;
@@ -85,6 +87,7 @@ export const DEFAULTS: Settings = {
   powder: 0.8,
   seed: 1,
   evolve: 0,
+  eyeAltitude: 0,
   ev: 0,
   fov: 80,
   yaw: 20,
@@ -95,7 +98,7 @@ export const DEFAULTS: Settings = {
 // What an edit invalidates. Ordered from cheapest to most expensive.
 export type Invalidation = 'view' | 'clouds' | 'weather' | 'sky';
 
-const SKY_KEYS: (keyof Settings)[] = ['sunElevation', 'sunAzimuth', 'sunIntensity', 'haze', 'groundAlbedo'];
+const SKY_KEYS: (keyof Settings)[] = ['sunElevation', 'sunAzimuth', 'sunIntensity', 'haze', 'groundAlbedo', 'eyeAltitude'];
 const WEATHER_KEYS: (keyof Settings)[] = ['seed', 'weatherScale', 'baseWeather'];
 const VIEW_KEYS: (keyof Settings)[] = ['ev', 'fov', 'yaw', 'pitch'];
 
@@ -129,6 +132,6 @@ export function packParams(s: Settings, frame: number, q: Quality = QUALITY[s.qu
     s.windX, s.windZ, 0, 0,
     q.viewSteps, q.lightSteps, q.faceSize, frame,
     s.haze, s.groundAlbedo, s.seed, s.octaves,
-    s.evolve, 0, 0, 0,
+    s.evolve, s.eyeAltitude, 0, 0,
   ]);
 }

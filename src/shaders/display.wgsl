@@ -19,7 +19,7 @@ struct View {
 // Sky and cloud light on the ground (the direct sun is already in the cloud cube): the
 // downwelling irradiance integrated from the finished cube, through the air in front.
 fn ground_ambient(dir: vec3f) -> vec3f {
-  let uvs = ground_air_uvs(dir, params.layer.z, params.layer.w);
+  let uvs = ground_air_uvs(dir, params.layer.z, params.layer.w, eye_altitude(params.anim.y));
   if (uvs.x < 0.0) { return vec3f(0.0); }
   let air = clamp(
     textureSampleLevel(transmittance_lut, cube_sampler, uvs.xy, 0.0).rgb
@@ -49,16 +49,19 @@ fn environment(dir: vec3f) -> vec3f {
   let sun = params.sun_dir.xyz;
   let radius = params.sun_color.w;
   let cos_angle = dot(dir, sun);
-  if (cos_angle > cos(radius) && dir.y > 0.0) {
+  let eye_alt = eye_altitude(params.anim.y);
+  if (cos_angle > cos(radius) && ground_hit(params.layer.z + eye_alt, dir, params.layer.z) < 0.0) {
     let mu = dir.y;
-    let t = textureSampleLevel(transmittance_lut, cube_sampler, vec2f(mu * 0.5 + 0.5, 0.0), 0.0).rgb;
+    let h = clamp(eye_alt / (params.layer.w - params.layer.z), 0.0, 1.0);
+    let t = textureSampleLevel(transmittance_lut, cube_sampler, vec2f(mu * 0.5 + 0.5, h), 0.0).rgb;
     let solid_angle = 2.0 * PI * (1.0 - cos(radius));
     let disc = params.sun_color.rgb * params.sun_dir.w / solid_angle * t;
     // Soft limb darkening.
     let r = acos(clamp(cos_angle, -1.0, 1.0)) / radius;
     background += disc * (1.0 - 0.6 * (1.0 - sqrt(max(0.0, 1.0 - r * r))));
   }
-  return background * cloud.a + cloud.rgb + ground_ambient(dir);
+  // Clouds between the eye and the ground (from above) hide its sky light too.
+  return (background + ground_ambient(dir)) * cloud.a + cloud.rgb;
 }
 
 fn aces_fit(x: vec3f) -> vec3f {

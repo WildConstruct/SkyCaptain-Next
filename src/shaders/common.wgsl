@@ -10,7 +10,7 @@ struct Params {
   wind: vec4f,        // weather offset xz (km): shape and detail ride with it; zw unused
   march: vec4f,       // max view steps, light steps, cube face size, frame index
   misc: vec4f,        // haze distance, ground albedo, weather seed, scattering octave count
-  anim: vec4f,        // x = evolution: upward scroll of the shape noise (km); yzw unused
+  anim: vec4f,        // x = evolution: upward scroll of the shape noise (km), y = eye altitude (km); zw unused
 }
 
 const PI: f32 = 3.14159265358979;
@@ -62,17 +62,28 @@ fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
   return (1.0 - g2) / (4.0 * PI * denom * sqrt(denom));
 }
 
-// The ground seen along dir from the eye (2 m up): transmittance-LUT uvs for the air between
-// the eye and the ground point, as the ratio of two upward rays (LUT: x = mu * 0.5 + 0.5,
-// y = height fraction). xy = at the ground point, zw = at the eye; x < 0 when dir misses
-// the ground. Radii are arguments because this prelude is shared by modules without params.
-fn ground_air_uvs(dir: vec3f, ground_r: f32, top_r: f32) -> vec4f {
-  let origin = vec3f(0.0, ground_r + 0.002, 0.0);
-  let t = ray_sphere(origin, dir, ground_r).x;
-  if (dir.y >= 0.0 || t <= 0.0) { return vec4f(-1.0); }
+// The eye sits above the ground at the origin: 2 m by default, raised by the Elevation
+// setting (params.anim.y). Shaders that have params pass eye_altitude(params.anim.y); radii
+// are arguments because this prelude is shared by modules without params.
+fn eye_altitude(setting: f32) -> f32 { return max(setting, 0.002); }
+
+// Distance along dir from an eye at radius eye_r to the ground, or -1 when it misses.
+fn ground_hit(eye_r: f32, dir: vec3f, ground_r: f32) -> f32 {
+  let hit = ray_sphere(vec3f(0.0, eye_r, 0.0), dir, ground_r);
+  return select(-1.0, hit.x, hit.x > 0.0);
+}
+
+// The ground seen along dir from the eye (eye_alt up): transmittance-LUT uvs for the air
+// between the eye and the ground point, as the ratio of two upward rays (LUT: x = mu * 0.5
+// + 0.5, y = height fraction). xy = at the ground point, zw = at the eye; x < 0 when dir
+// misses the ground.
+fn ground_air_uvs(dir: vec3f, ground_r: f32, top_r: f32, eye_alt: f32) -> vec4f {
+  let origin = vec3f(0.0, ground_r + eye_alt, 0.0);
+  let t = ground_hit(ground_r + eye_alt, dir, ground_r);
+  if (t <= 0.0) { return vec4f(-1.0); }
   let up = -dir;
   let g = origin + dir * t;
   return vec4f(
     dot(normalize(g), up) * 0.5 + 0.5, 0.0,
-    up.y * 0.5 + 0.5, clamp(0.002 / (top_r - ground_r), 0.0, 1.0));
+    up.y * 0.5 + 0.5, clamp(eye_alt / (top_r - ground_r), 0.0, 1.0));
 }

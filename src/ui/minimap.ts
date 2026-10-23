@@ -167,7 +167,12 @@ export class Minimap {
       ctx.arc(cx, cy, r * k, 0, Math.PI * 2);
       ctx.stroke();
     }
-    const horizon = Math.sqrt(2 * 6360 * s.cloudBottom);
+    // How far the cloud base is visible: to where sight lines graze it from below, or to
+    // the horizon beyond it from above.
+    const eye = Math.max(s.eyeAltitude, 0.002);
+    const horizon = eye < s.cloudBottom
+      ? Math.sqrt(2 * 6360 * (s.cloudBottom - eye))
+      : Math.sqrt(2 * 6360 * eye) + Math.sqrt(2 * 6360 * s.cloudBottom);
     ctx.setLineDash([3 * dpr, 4 * dpr]);
     ctx.strokeStyle = 'rgba(255,200,120,0.35)';
     ctx.beginPath();
