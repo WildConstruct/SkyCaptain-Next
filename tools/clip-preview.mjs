@@ -18,14 +18,34 @@ const height = Math.round((width * 9) / 16 / 2) * 2;
 const dir = join(dirname(out), 'clip-frames');
 rmSync(dir, { recursive: true, force: true });
 mkdirSync(dir, { recursive: true });
-const browser = await chromium.launch({
-  executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
-  args: ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-webgpu-adapter=swiftshader', '--enable-features=Vulkan'],
-});
-const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+// SKY_GPU=1 renders on the machine's GPU through installed Chrome (or SKY_CHROME, a path
+// to a Chrome/Chromium binary); SKY_HEADED=1 shows the window, for drivers that will not
+// give headless Chrome the GPU. Without SKY_GPU it uses the sandbox's SwiftShader.
+const gpu = process.env.SKY_GPU === '1';
+const browser = await chromium.launch(gpu
+  ? {
+    ...(process.env.SKY_CHROME ? { executablePath: process.env.SKY_CHROME } : { channel: 'chrome' }),
+    headless: process.env.SKY_HEADED !== '1',
+    args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist',
+      ...(process.platform === 'linux' ? ['--enable-features=Vulkan', '--use-angle=vulkan'] : [])],
+  }
+  : {
+    executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+    args: ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-webgpu-adapter=swiftshader', '--enable-features=Vulkan'],
+  });
+const page = await browser.newPage({ viewport: { width: Math.max(1280, width), height: Math.max(720, height) } });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.goto(`${process.env.SKY_URL ?? 'http://127.0.0.1:5173/'}?headless=1${query ? `&${query}` : ''}`);
 await page.waitForFunction(() => window.skyAnimate);
+const adapter = await page.evaluate(async () => {
+  const a = await navigator.gpu?.requestAdapter();
+  return a ? [a.info?.vendor, a.info?.architecture, a.info?.description].filter(Boolean).join(' ') || 'unknown adapter' : 'no WebGPU adapter';
+});
+console.log(`GPU: ${adapter}`);
+if (gpu && /swiftshader|no WebGPU/i.test(adapter)) {
+  console.error('SKY_GPU=1 but Chrome has no hardware WebGPU adapter: try SKY_HEADED=1, or SKY_CHROME pointing at a current Chrome.');
+  process.exit(1);
+}
 const { duration, fps } = await page.evaluate(([json, shapes]) => {
   for (const shape of JSON.parse(shapes)) window.skyShapes.add(shape);
   window.skyAnimate.value = { ...window.skyAnimate.value, ...JSON.parse(json) };
