@@ -3,13 +3,16 @@
 import type { GroundStore } from '../ground';
 import { TERRAIN_TYPES, type TerrainRecipe } from '../terrain';
 
-type RecipeNumber = 'waterLevel' | 'relief' | 'patchKm' | 'tileKm';
+type RecipeNumber = 'waterLevel' | 'relief' | 'patchKm' | 'tileKm' | 'heightKm' | 'ridges' | 'snowKm';
 
 const SLIDERS: { key: RecipeNumber; label: string; min: number; max: number; step: number; unit?: string; hint: string }[] = [
   { key: 'waterLevel', label: 'Water', min: 0, max: 0.9, step: 0.01, hint: 'How much low ground is flooded: lakes, then coasts, then sea' },
   { key: 'relief', label: 'Geography', min: 0, max: 1, step: 0.01, hint: 'How strongly height sorts the land (meadow low, forest higher, rock on top); 0 is pure patchwork' },
   { key: 'patchKm', label: 'Patch size', min: 1, max: 30, step: 0.5, unit: 'km', hint: 'Typical size of a forest or a block of fields' },
   { key: 'tileKm', label: 'Tile size', min: 0.2, max: 5, step: 0.1, unit: 'km', hint: 'Grain of the layout; the ground repeats every 128 tiles' },
+  { key: 'heightKm', label: 'Height', min: 0, max: 8, step: 0.05, unit: 'km', hint: 'Highest ground: 0 is flat, a few tenths rolling hills, several km mountains' },
+  { key: 'ridges', label: 'Ridges', min: 0, max: 1, step: 0.01, hint: 'Rounded hills (0) to sharp ridged ranges (1)' },
+  { key: 'snowKm', label: 'Snow line', min: 0, max: 9, step: 0.05, unit: 'km', hint: 'Altitude above which snow lies on gentler slopes' },
 ];
 
 export class GroundPanel {

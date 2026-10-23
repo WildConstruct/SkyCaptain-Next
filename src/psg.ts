@@ -243,6 +243,9 @@ export function applyGroundVars(vars: Record<string, Value>, ground: GroundStore
   set('relief', num('ground.geography'));
   set('patchKm', num('ground.patch_km'));
   set('tileKm', num('ground.tile_km'));
+  set('heightKm', num('ground.height_km'));
+  set('ridges', num('ground.ridges'));
+  set('snowKm', num('ground.snow_km'));
   // Without ground.seed the layout follows the roll, so a reroll lays out new ground.
   changes.seed = Math.round(num('ground.seed') ?? rollSeed);
   const weights = { ...ground.recipe.weights };

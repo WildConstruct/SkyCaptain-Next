@@ -20,6 +20,11 @@
 // Ground terrain (ground.wgsl).
 @group(0) @binding(14) var terrain_tex: texture_2d<f32>;
 @group(0) @binding(15) var<uniform> ground: Ground;
+// Relief (terrain.ts heightField): ground height in km over the terrain period.
+@group(0) @binding(16) var height_tex: texture_2d<f32>;
+// What the view saw of the ground, for the composite (see render()).
+@group(0) @binding(17) var<storage, read_write> ground_accum: array<vec2u>;
+@group(0) @binding(18) var ground_out: texture_storage_2d_array<rgba16float, write>;
 
 const BAYER_OFFSETS = array<vec2u, 16>(
   vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
@@ -303,32 +308,161 @@ fn ground_shadow(@builtin(global_invocation_id) id: vec3u) {
   textureStore(shadow_out, id.xy, vec4f(shadow, 0.0, 0.0, 1.0));
 }
 
-fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
-  let origin = eye();
-  let t_ground = ground_hit(length(origin), dir, ground_radius());
-  if (t_ground <= 0.0) { return vec3f(0.0); }
-  let g = origin + dir * t_ground;
-  let n = normalize(g);
+// ---- Relief -------------------------------------------------------------------------
+// skyCaptain: the ground has height (terrain.ts heightField). Rays that can reach it march
+// the height field; mountains then hide the clouds and sky behind them, and get their own
+// air (aerial perspective) up to the hit.
+
+const TERRAIN_STEPS: i32 = 160;
+const TERRAIN_BISECTIONS: i32 = 7;
+const TERRAIN_MAX_KM: f32 = 400.0;
+const SELF_SHADOW_STEPS: i32 = 20;
+
+fn relief_on() -> bool { return ground.info.x > 0.5 && ground.relief.x > 0.0; }
+
+// Ground height above sea level at xz (km).
+fn terrain_height(xz: vec2f) -> f32 {
+  if (!relief_on()) { return 0.0; }
+  let period = ground.info.y * ground.info.z;
+  return textureSampleLevel(height_tex, repeat_sampler, xz / period, 0.0).r;
+}
+
+// Surface normal from the height field's slope, tilted from the local up.
+fn terrain_normal(xz: vec2f, up: vec3f) -> vec3f {
+  if (!relief_on()) { return up; }
+  let e = ground.info.y * ground.info.z / f32(textureDimensions(height_tex).x);
+  let dx = terrain_height(xz + vec2f(e, 0.0)) - terrain_height(xz - vec2f(e, 0.0));
+  let dz = terrain_height(xz + vec2f(0.0, e)) - terrain_height(xz - vec2f(0.0, e));
+  return normalize(up - vec3f(dx, 0.0, dz) / (2.0 * e));
+}
+
+// Distance along dir to the ground (relief or sea level), or -1 when the ray misses it.
+fn terrain_hit(o: vec3f, dir: vec3f, jitter: f32) -> f32 {
+  let r0 = ground_radius();
+  let sea = ground_hit(length(o), dir, r0);
+  if (!relief_on()) { return sea; }
+  // Only the slab under the highest ground can hold a hit.
+  let slab = ray_sphere(o, dir, r0 + ground.relief.x + 0.005);
+  if (slab.y <= 0.0) { return -1.0; }
+  var t = max(slab.x, 0.0);
+  var t_end = min(slab.y, t + TERRAIN_MAX_KM);
+  if (sea > 0.0) { t_end = min(t_end, sea); }
+  var prev = t;
+  // Steps follow the height above the ground, never shorter than a fraction of the
+  // distance (distant ridges are coarse anyway); jittered so the stepping does not band.
+  t += (0.003 + t * 0.012) * jitter;
+  for (var i = 0; i < TERRAIN_STEPS; i++) {
+    if (t > t_end) { break; }
+    let p = o + dir * t;
+    let gap = length(p) - r0 - terrain_height(p.xz);
+    if (gap < 0.0) {
+      var a = prev;
+      var b = t;
+      for (var k = 0; k < TERRAIN_BISECTIONS; k++) {
+        let m = 0.5 * (a + b);
+        let pm = o + dir * m;
+        if (length(pm) - r0 - terrain_height(pm.xz) < 0.0) { b = m; } else { a = m; }
+      }
+      return b;
+    }
+    prev = t;
+    t += max(gap * 0.5, 0.003 + t * 0.012);
+  }
+  // Past the relief the ray can still meet the sea.
+  return select(-1.0, sea, sea > 0.0 && t >= sea);
+}
+
+// Sun visibility over the relief from a ground point (1 = lit, 0 = behind a ridge).
+fn terrain_shadow(g: vec3f, sun: vec3f, jitter: f32) -> f32 {
+  if (!relief_on()) { return 1.0; }
+  let r0 = ground_radius();
+  var t = 0.01 + 0.02 * jitter;
+  var lit = 1.0;
+  for (var i = 0; i < SELF_SHADOW_STEPS; i++) {
+    let p = g + sun * t;
+    let gap = length(p) - r0 - terrain_height(p.xz);
+    // Soft: grazing passes over a ridge darken partly.
+    lit = min(lit, clamp(gap / (0.02 * t) + 1.0, 0.0, 1.0));
+    if (lit <= 0.0 || length(p) - r0 > ground.relief.x) { break; }
+    t *= 1.45;
+  }
+  return lit;
+}
+
+// Air transmittance from the eye to p along dir (the transmittance LUT as a ratio of two
+// rays to the top of the atmosphere, taken in whichever direction avoids the planet).
+fn air_between(o: vec3f, p: vec3f, dir: vec3f) -> vec3f {
+  let ro = length(o);
+  let rp = length(p);
+  if (ground_hit(rp, vec3f(0.0, dot(normalize(p), dir), length(cross(normalize(p), dir))), ground_radius()) < 0.0) {
+    // Onward from p the ray escapes: T(o -> p) = T(o -> top) / T(p -> top).
+    return clamp(transmittance_lut_at(ro, dot(o / ro, dir)) / max(transmittance_lut_at(rp, dot(p / rp, dir)), vec3f(1e-6)), vec3f(0.0), vec3f(1.0));
+  }
+  // Toward the planet: use the reversed ray, which escapes from p back past o.
+  return clamp(transmittance_lut_at(rp, dot(p / rp, -dir)) / max(transmittance_lut_at(ro, dot(o / ro, -dir)), vec3f(1e-6)), vec3f(0.0), vec3f(1.0));
+}
+
+// The air's own glow between the eye and a hit at t: the sky cube holds the in-scatter of
+// the whole path in this direction (to space, or to sea level), so take the fraction of it
+// that the air up to the hit accounts for.
+fn air_inscatter(o: vec3f, dir: vec3f, t: f32) -> vec3f {
+  let full = textureSampleLevel(sky_tex, clamp_sampler, dir, 0.0).rgb;
+  let sea = ground_hit(length(o), dir, ground_radius());
+  var t_full = 1e4;
+  if (sea > 0.0) { t_full = sea; }
+  let to_hit = air_between(o, o + dir * t, dir);
+  var to_end = vec3f(0.0);
+  if (sea > 0.0) { to_end = air_between(o, o + dir * sea, dir); }
+  else { to_end = transmittance_lut_at(length(o), dot(normalize(o), dir)); }
+  return full * clamp((1.0 - to_hit) / max(1.0 - to_end, vec3f(1e-4)), vec3f(0.0), vec3f(1.0));
+}
+
+// Layered landscape material over the land-cover type, by slope and altitude: steep faces
+// turn to rock, snow lies above the snow line on gentler slopes.
+fn layered_albedo(surface: Surface, xz: vec2f, height: f32, slope: f32) -> vec3f {
+  if (surface.water > 0.0 || !relief_on()) { return surface.albedo; }
+  let grain = gfbm(xz / 0.15, 91u);
+  let rock = ground.palette[5].rgb * mix(0.7, 1.25, grain);
+  var albedo = mix(surface.albedo, rock, smoothstep(0.3, 0.55, slope + (grain - 0.5) * 0.15));
+  let line = ground.relief.z + (gfbm(xz / 1.5, 93u) - 0.5) * 0.35;
+  let snow = smoothstep(line - 0.08, line + 0.08, height) * (1.0 - smoothstep(0.45, 0.7, slope));
+  albedo = mix(albedo, vec3f(0.82, 0.84, 0.88) * mix(0.9, 1.05, grain), snow);
+  return albedo;
+}
+
+struct GroundHit {
+  radiance: vec3f,  // sun and glint off the ground, through the air in front
+  gbuffer: vec4f,   // rgb = albedo x air (x the composite's sky-light share), a = water
+}
+
+fn ground_radiance(o: vec3f, dir: vec3f, t_ground: f32, jitter: vec3f) -> GroundHit {
+  let g = o + dir * t_ground;
+  let up = normalize(g);
+  let height = length(g) - ground_radius();
+  let n = terrain_normal(g.xz, up);
+  let slope = 1.0 - dot(n, up);
   let sun = params.sun_dir.xyz;
   let illum = params.sun_color.rgb * params.sun_dir.w;
 
   let surface = ground_surface(g.xz);
+  let albedo = layered_albedo(surface, g.xz, height, slope);
   let cos_sun = dot(n, sun);
   var direct = vec3f(0.0);
   var glint = vec3f(0.0);
-  if (cos_sun > 0.0) {
+  if (cos_sun > 0.0 && dot(up, sun) > -0.05) {
     var shadow = textureSampleLevel(shadow_tex, clamp_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0).r;
-    // skyCaptain: from altitude the ground reaches far past the shadow map; march the
-    // cloud shadow there directly (coarser, but only for distant ground).
-    if (any(abs(g.xz) > vec2f(GROUND_SHADOW_KM * 0.5))) {
+    // skyCaptain: the shadow map is sea-level ground near the eye; elsewhere (far ground,
+    // or relief, which lifts the ground into the clouds) march the cloud shadow directly.
+    if (any(abs(g.xz) > vec2f(GROUND_SHADOW_KM * 0.5)) || relief_on()) {
       shadow = exp(-layer_optical_depth(g, sun, DISTANT_SHADOW_STEPS, jitter.x));
     }
-    let sun_at_ground = illum * transmittance_lut_at(length(g), cos_sun) * shadow;
+    shadow *= terrain_shadow(g, sun, jitter.z);
+    let sun_at_ground = illum * transmittance_lut_at(length(g), max(dot(up, sun), 0.0)) * shadow;
     direct = sun_at_ground * cos_sun;
     if (surface.water > 0.0) {
       // Sun glint on the waves (normalized Blinn-Phong); sky and cloud reflections are
       // added at composite time from the finished cubes.
-      let nw = water_normal(g.xz, n);
+      let nw = water_normal(g.xz, up);
       let h = normalize(sun - dir);
       let shine = 400.0;
       glint = sun_at_ground * water_fresnel(dot(h, -dir)) * (shine + 8.0) / (8.0 * PI)
@@ -336,38 +470,48 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
     }
   }
   // skyCaptain: the ground's sky light is normally integrated from the finished cube at
-  // composite time (display.wgsl ground_ambient), which is right for ground near an eye
-  // under the clouds. From above them, the eye sees clear sky the ground below does not:
-  // there, light each ground point by the sky dimmed by the cloud straight above it
-  // (cloud bottoms still pass some light down).
+  // composite time (the ground buffer below carries what it needs), which is right for
+  // ground near an eye under the clouds. From above them, the eye sees clear sky the ground
+  // below does not: there, light each ground point by the sky dimmed by the cloud straight
+  // above it (cloud bottoms still pass some light down).
   let above = above_clouds_weight();
   if (above > 0.0) {
     let sky_top = textureSampleLevel(sky_tex, clamp_sampler, vec3f(0.0, 1.0, 0.0), 0.0).rgb;
     let sky_side = textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(1.0, 0.25, 0.0)), 0.0).rgb;
-    let overhead = exp(-layer_optical_depth(g, n, OVERHEAD_STEPS, jitter.y));
+    let overhead = exp(-layer_optical_depth(g, up, OVERHEAD_STEPS, jitter.y));
     direct += above * PI * (sky_top * 0.5 + sky_side * 0.5) * mix(0.35, 1.0, overhead);
   }
-  // Air between the eye and the ground point.
-  let uvs = ground_air_uvs(dir, ground_radius(), params.layer.w, eye_altitude(params.anim.y));
-  let air = clamp(
-    textureSampleLevel(transmittance_lut, clamp_sampler, uvs.xy, 0.0).rgb
-      / max(textureSampleLevel(transmittance_lut, clamp_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
-    vec3f(0.0), vec3f(1.0));
-  return air * (surface.albedo / PI * direct + glint);
+  let air = air_between(o, g, dir);
+  var hit: GroundHit;
+  hit.radiance = air * (albedo / PI * direct + glint);
+  // Slopes facing away see less sky: a simple sky-view term from the normal.
+  let sky_view = 0.5 + 0.5 * dot(n, up);
+  hit.gbuffer = vec4f(albedo * air * (1.0 - above) * sky_view, surface.water);
+  return hit;
 }
 
 struct MarchResult {
   scatter: vec3f,
   transmittance: f32,
+  ground: vec4f,  // the ground buffer for the composite (see GroundHit), seen through the clouds
 }
 
 // The view from the eye along dir: clouds, then the ground behind them (seen through what
-// the clouds let through). Sky and air are added at composite time.
+// the clouds let through). The ground is opaque: it hides the sky behind it and carries its
+// own air in front, so its transmittance is 0 and the composite adds no sky there.
 fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   let origin = eye();
-  var result = march_clouds(origin, dir, shell_interval(origin, dir), seed);
-  if (ground_hit(length(origin), dir, ground_radius()) > 0.0) {
-    result.scatter += ground_radiance(dir, hash33(seed + vec3u(0u, 0u, 4242u))) * result.transmittance;
+  let jitter = hash33(seed + vec3u(0u, 0u, 4242u));
+  let t_ground = terrain_hit(origin, dir, jitter.x);
+  var span = shell_interval(origin, dir);
+  // Clouds behind a ridge are hidden by it.
+  if (t_ground > 0.0 && span.y > 0.0) { span.y = min(span.y, t_ground); }
+  var result = march_clouds(origin, dir, span, seed);
+  if (t_ground > 0.0) {
+    let hit = ground_radiance(origin, dir, t_ground, jitter);
+    result.scatter += (hit.radiance + air_inscatter(origin, dir, t_ground)) * result.transmittance;
+    result.ground = hit.gbuffer * result.transmittance;
+    result.transmittance = 0.0;
   }
   return result;
 }
@@ -473,8 +617,36 @@ fn unpack(v: vec2u) -> vec4f {
   return vec4f(unpack2x16float(v.x), unpack2x16float(v.y));
 }
 
-fn store_texel(texel: vec2u, face: u32, value: vec4f) {
+fn store_texel(texel: vec2u, face: u32, value: vec4f, ground_value: vec4f) {
   textureStore(cloud_out, texel, face, value);
+  textureStore(ground_out, texel, face, ground_value);
+}
+
+// Running mean of a texel's samples in both outputs; early passes fill the texel's 4x4 or
+// 2x2 block so edits show at once.
+fn resolve_texel(id: vec2u, texel: vec2u, face: u32, size: u32, slot: u32, pass_index: u32, value: vec4f, ground_value: vec4f) {
+  let index = (face * size + texel.y) * size + texel.x;
+  var resolved = value;
+  var ground_resolved = ground_value;
+  if (pass_index > 0u) {
+    let previous = unpack(accum[index]);
+    resolved = previous + (value - previous) / f32(pass_index + 1u);
+    let ground_previous = unpack(ground_accum[index]);
+    ground_resolved = ground_previous + (ground_value - ground_previous) / f32(pass_index + 1u);
+  }
+  accum[index] = pack(resolved);
+  ground_accum[index] = pack(ground_resolved);
+  if (pass_index == 0u && slot == 0u) {
+    for (var y = 0u; y < 4u; y++) {
+      for (var x = 0u; x < 4u; x++) { store_texel(id * 4u + vec2u(x, y), face, resolved, ground_resolved); }
+    }
+  } else if (pass_index == 0u && slot < 4u) {
+    for (var y = 0u; y < 2u; y++) {
+      for (var x = 0u; x < 2u; x++) { store_texel(texel + vec2u(x, y), face, resolved, ground_resolved); }
+    }
+  } else {
+    store_texel(texel, face, resolved, ground_resolved);
+  }
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -493,27 +665,7 @@ fn render(@builtin(global_invocation_id) id: vec3u) {
   if (pass_index > 0u) { sub = hash33(seed + vec3u(0u, 0u, 7777u)).xy; }
   let dir = cube_dir(face, (vec2f(texel) + sub) / f32(size));
   let m = march(dir, seed);
-  let value = vec4f(m.scatter, m.transmittance);
-
-  let index = (face * size + texel.y) * size + texel.x;
-  var resolved = value;
-  if (pass_index > 0u) {
-    let previous = unpack(accum[index]);
-    resolved = previous + (value - previous) / f32(pass_index + 1u);
-  }
-  accum[index] = pack(resolved);
-
-  if (pass_index == 0u && slot == 0u) {
-    for (var y = 0u; y < 4u; y++) {
-      for (var x = 0u; x < 4u; x++) { store_texel(id.xy * 4u + vec2u(x, y), face, resolved); }
-    }
-  } else if (pass_index == 0u && slot < 4u) {
-    for (var y = 0u; y < 2u; y++) {
-      for (var x = 0u; x < 2u; x++) { store_texel(texel + vec2u(x, y), face, resolved); }
-    }
-  } else {
-    store_texel(texel, face, resolved);
-  }
+  resolve_texel(id.xy, texel, face, size, slot, pass_index, vec4f(m.scatter, m.transmittance), m.ground);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -633,16 +785,21 @@ fn sample_phase(wo: vec3f, rng: ptr<function, Rng>) -> vec3f {
 
 fn reference_path(dir0: vec3f, rng: ptr<function, Rng>) -> vec4f {
   let origin = eye();
-  // The ground uses the same analytic shading as the fast renderer.
+  // The ground uses the same analytic shading as the fast renderer (without the ground
+  // buffer: the reference is for judging clouds).
   var ground = vec3f(0.0);
-  if (ground_hit(length(origin), dir0, ground_radius()) > 0.0) {
-    ground = ground_radiance(dir0, vec3f(rng_next(rng), rng_next(rng), rng_next(rng)));
+  let jitter = vec3f(rng_next(rng), rng_next(rng), rng_next(rng));
+  let t_ground = terrain_hit(origin, dir0, jitter.x);
+  if (t_ground > 0.0) {
+    ground = ground_radiance(origin, dir0, t_ground, jitter).radiance + air_inscatter(origin, dir0, t_ground);
   }
-  let span0 = shell_interval(origin, dir0);
-  if (span0.y <= 0.0) { return vec4f(ground, 1.0); }
+  var span0 = shell_interval(origin, dir0);
+  if (t_ground > 0.0 && span0.y > 0.0) { span0.y = min(span0.y, t_ground); }
+  let open_sky = select(1.0, 0.0, t_ground > 0.0);
+  if (span0.y <= 0.0) { return vec4f(ground, open_sky); }
   let majorant = max(params.cloud.z, 1e-3);
   let first = delta_track(origin, dir0, span0.x, min(span0.y, span0.x + MAX_RAY_KM), majorant, rng);
-  if (!first.hit) { return vec4f(ground, 1.0); }
+  if (!first.hit) { return vec4f(ground, open_sky); }
 
   let sun = params.sun_dir.xyz;
   let illum = params.sun_color.rgb * params.sun_dir.w;
@@ -715,19 +872,5 @@ fn render_reference(@builtin(global_invocation_id) id: vec3u) {
   let sub = vec2f(rng_next(&rng), rng_next(&rng));
   let dir = cube_dir(face, (vec2f(texel) + sub) / f32(size));
   let value = reference_path(dir, &rng);
-
-  let index = (face * size + texel.y) * size + texel.x;
-  var resolved = value;
-  if (pass_index > 0u) {
-    let previous = unpack(accum[index]);
-    resolved = previous + (value - previous) / f32(pass_index + 1u);
-  }
-  accum[index] = pack(resolved);
-  if (pass_index == 0u && slot == 0u) {
-    for (var y = 0u; y < 4u; y++) {
-      for (var x = 0u; x < 4u; x++) { store_texel(id.xy * 4u + vec2u(x, y), face, resolved); }
-    }
-  } else {
-    store_texel(texel, face, resolved);
-  }
+  resolve_texel(id.xy, texel, face, size, slot, pass_index, value, vec4f(0.0));
 }

@@ -16,36 +16,41 @@ struct View {
 @group(0) @binding(5) var transmittance_lut: texture_2d<f32>;
 @group(0) @binding(6) var<storage, read> downwelling: vec4f;
 // Ground terrain (ground.wgsl).
+// Declared for ground.wgsl; unused here (the cloud pass reads the layout).
 @group(0) @binding(7) var terrain_tex: texture_2d<f32>;
 @group(0) @binding(8) var<uniform> ground: Ground;
+// What the cloud pass saw of the ground per direction (clouds.wgsl GroundHit).
+@group(0) @binding(9) var ground_tex: texture_cube<f32>;
 
 // Sky and cloud light on the ground (the direct sun is already in the cloud cube): the
-// downwelling irradiance integrated from the finished cube, times the ground's albedo there,
-// plus on water the mirror of the finished sky and clouds; all through the air in front.
+// downwelling irradiance integrated from the finished cube, times what the cloud pass saw of
+// the ground in this direction (albedo through the air and the clouds in front), plus on
+// water the mirror of the finished sky and clouds. Water lies at sea level, so its point is
+// the sea-level hit; relief in front has already zeroed the water share.
 fn ground_ambient(dir: vec3f) -> vec3f {
-  let eye_alt = eye_altitude(params.anim.y);
-  let uvs = ground_air_uvs(dir, params.layer.z, params.layer.w, eye_alt);
-  if (uvs.x < 0.0) { return vec3f(0.0); }
-  let air = clamp(
-    textureSampleLevel(transmittance_lut, cube_sampler, uvs.xy, 0.0).rgb
-      / max(textureSampleLevel(transmittance_lut, cube_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
-    vec3f(0.0), vec3f(1.0));
-  let eye_r = params.layer.z + eye_alt;
-  let g = vec3f(0.0, eye_r, 0.0) + dir * ground_hit(eye_r, dir, params.layer.z);
-  let surface = ground_surface(g.xz);
-  // From above the clouds the ground's sky light is computed per point in the cloud pass.
-  let below = 1.0 - smoothstep(params.layer.x, params.layer.x + 0.3, eye_alt);
-  var light = surface.albedo / PI * downwelling.rgb * below;
-  if (surface.water > 0.0) {
-    let n = water_normal(g.xz, normalize(g));
-    var r = reflect(dir, n);
-    // Waves can tip a reflection below the horizon: fold it back up.
-    if (dot(r, normalize(g)) < 0.0) { r = reflect(r, normalize(g)); }
-    let cloud = textureSampleLevel(cloud_tex, cube_sampler, r, 0.0);
-    let mirrored = textureSampleLevel(sky_tex, cube_sampler, r, 0.0).rgb * cloud.a + cloud.rgb;
-    light += water_fresnel(dot(-dir, n)) * mirrored * surface.water;
+  let seen = textureSampleLevel(ground_tex, cube_sampler, dir, 0.0);
+  var light = seen.rgb / PI * downwelling.rgb;
+  if (seen.a > 0.0) {
+    let eye_alt = eye_altitude(params.anim.y);
+    let eye_r = params.layer.z + eye_alt;
+    let t = ground_hit(eye_r, dir, params.layer.z);
+    if (t > 0.0) {
+      let uvs = ground_air_uvs(dir, params.layer.z, params.layer.w, eye_alt);
+      let air = clamp(
+        textureSampleLevel(transmittance_lut, cube_sampler, uvs.xy, 0.0).rgb
+          / max(textureSampleLevel(transmittance_lut, cube_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
+        vec3f(0.0), vec3f(1.0));
+      let g = vec3f(0.0, eye_r, 0.0) + dir * t;
+      let n = water_normal(g.xz, normalize(g));
+      var r = reflect(dir, n);
+      // Waves can tip a reflection below the horizon: fold it back up.
+      if (dot(r, normalize(g)) < 0.0) { r = reflect(r, normalize(g)); }
+      let cloud = textureSampleLevel(cloud_tex, cube_sampler, r, 0.0);
+      let mirrored = textureSampleLevel(sky_tex, cube_sampler, r, 0.0).rgb * cloud.a + cloud.rgb;
+      light += water_fresnel(dot(-dir, n)) * mirrored * air * seen.a;
+    }
   }
-  return air * light;
+  return light;
 }
 
 struct VsOut {
@@ -80,8 +85,8 @@ fn environment(dir: vec3f) -> vec3f {
     let r = acos(clamp(cos_angle, -1.0, 1.0)) / radius;
     background += disc * (1.0 - 0.6 * (1.0 - sqrt(max(0.0, 1.0 - r * r))));
   }
-  // Clouds between the eye and the ground (from above) hide its sky light too.
-  return (background + ground_ambient(dir)) * cloud.a + cloud.rgb;
+  // The ground's share already carries the clouds in front of it.
+  return background * cloud.a + cloud.rgb + ground_ambient(dir);
 }
 
 fn aces_fit(x: vec3f) -> vec3f {

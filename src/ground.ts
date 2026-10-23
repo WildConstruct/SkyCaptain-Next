@@ -2,7 +2,7 @@
 // collapse to. Every change recollapses (about 50 ms) and notifies subscribers; main.ts
 // hands the result to the renderer.
 
-import { DEFAULT_TERRAIN, TERRAIN_GRID, TerrainMap, TerrainRecipe, generateTerrain, parseTerrain } from './terrain';
+import { DEFAULT_TERRAIN, HeightField, TERRAIN_GRID, TerrainMap, TerrainRecipe, generateTerrain, heightField, parseTerrain } from './terrain';
 
 export class GroundStore {
   enabled = false;
@@ -10,10 +10,13 @@ export class GroundStore {
   /** Painted tiles: a type index, or -1 where the collapse decides. */
   readonly constraints = new Int8Array(TERRAIN_GRID * TERRAIN_GRID).fill(-1);
   map: TerrainMap;
+  /** Relief over the same period (flat when the recipe's height is 0). */
+  height: HeightField;
   private listeners = new Set<() => void>();
 
   constructor() {
     this.map = generateTerrain(this.recipe, this.constraints);
+    this.height = heightField(this.map, this.recipe);
   }
 
   subscribe(fn: () => void): () => void {
@@ -22,7 +25,10 @@ export class GroundStore {
   }
 
   private changed(regenerate: boolean): void {
-    if (regenerate) this.map = generateTerrain(this.recipe, this.constraints);
+    if (regenerate) {
+      this.map = generateTerrain(this.recipe, this.constraints);
+      this.height = heightField(this.map, this.recipe);
+    }
     for (const fn of this.listeners) fn();
   }
 

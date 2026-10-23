@@ -173,14 +173,16 @@ async function main(): Promise<void> {
   };
 
   // Ground terrain: ?terrain=1 turns it on for tools/, with optional terrainSeed,
-  // terrainWater, terrainRelief, terrainPatch and terrainTile.
+  // terrainWater, terrainRelief, terrainPatch, terrainTile, terrainHeight, terrainRidges and
+  // terrainSnow.
   const ground = new GroundStore();
-  ground.subscribe(() => renderer.setTerrain(ground.enabled ? { map: ground.map, recipe: ground.recipe } : null));
+  ground.subscribe(() => renderer.setTerrain(ground.enabled ? { map: ground.map, recipe: ground.recipe, height: ground.height } : null));
   if (query.get('terrain') === '1') {
     const num = (key: string) => (query.get(key) === null ? undefined : Number(query.get(key)));
     const changes = Object.fromEntries(Object.entries({
       seed: num('terrainSeed'), waterLevel: num('terrainWater'), relief: num('terrainRelief'),
       patchKm: num('terrainPatch'), tileKm: num('terrainTile'),
+      heightKm: num('terrainHeight'), ridges: num('terrainRidges'), snowKm: num('terrainSnow'),
     }).filter(([, v]) => v !== undefined));
     ground.enabled = true;
     ground.update(changes);

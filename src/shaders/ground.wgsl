@@ -9,6 +9,7 @@
 struct Ground {
   palette: array<vec4f, 6>, // linear albedo per type (rgb)
   info: vec4f,              // x = terrain on (0/1), y = tile size (km), z = grid side (tiles), w = seed
+  relief: vec4f,            // x = highest ground (km, 0 = flat), y = ground height under the eye (km), z = snow line (km)
 }
 
 const T_WATER: u32 = 0u;

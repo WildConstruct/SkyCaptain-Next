@@ -11,7 +11,8 @@ import exportWgsl from './shaders/export.wgsl?raw';
 import { Invalidation, QUALITY, Quality, Settings, packParams } from './settings';
 import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
 import type { LayerName } from './paint';
-import { TERRAIN_TYPES, type TerrainMap, type TerrainRecipe } from './terrain';
+import { HEIGHT_GRID, TERRAIN_TYPES, type HeightField, type TerrainMap, type TerrainRecipe } from './terrain';
+import { toHalf } from './half';
 
 const SKY_FACE = 256;
 /** 11 vec4f: must match Params in common.wgsl. */
@@ -19,8 +20,8 @@ const PARAMS_BYTES = 176;
 export const WEATHER_SIZE = 1024;
 /** Largest terrain grid the ground texture holds. */
 const TERRAIN_TEXTURE_MAX = 256;
-/** Ground uniform (ground.wgsl Ground): 6 palette vec4s and an info vec4. */
-const GROUND_BYTES = 7 * 16;
+/** Ground uniform (ground.wgsl Ground): 6 palette vec4s and two info vec4s. */
+const GROUND_BYTES = 8 * 16;
 /** GPU time per display frame spent on cloud passes, ms (the rest is left for the page). */
 const FRAME_BUDGET_MS = 10;
 const MAX_PASSES_PER_FRAME = 32;
@@ -64,6 +65,10 @@ export class Renderer {
   /** Ground terrain: one texel per tile (type, tile random, elevation) and its uniforms. */
   private terrainTex: GPUTexture;
   private groundBuffer: GPUBuffer;
+  /** Ground height (km, half float) over the terrain period. */
+  private heightTex: GPUTexture;
+  /** Ground height under the eye, km: the eye stands this much higher above sea level. */
+  private terrainOrigin = 0;
   private layerTex: Record<LayerName, GPUTexture>;
   private shapes: ShapeLayer[] = [];
   private transmittanceLut: GPUTexture;
@@ -71,6 +76,9 @@ export class Renderer {
   private skyCube: GPUTexture;
   private cloudCube!: GPUTexture;
   private accumBuffer!: GPUBuffer;
+  /** What the cloud pass saw of the ground per texel (albedo x air, water), for the composite. */
+  private groundCube!: GPUTexture;
+  private groundAccum!: GPUBuffer;
 
   private weatherPipeline: GPUComputePipeline;
   private transmittancePipeline: GPUComputePipeline;
@@ -147,6 +155,7 @@ export class Renderer {
     this.shapesBuffer = device.createBuffer({ size: SHAPES_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     this.terrainTex = device.createTexture({ size: [TERRAIN_TEXTURE_MAX, TERRAIN_TEXTURE_MAX], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     this.groundBuffer = device.createBuffer({ size: GROUND_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.heightTex = device.createTexture({ size: [HEIGHT_GRID, HEIGHT_GRID], format: 'r16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     this.setTerrain(null);
     const layer = () => device.createTexture({
       size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
@@ -217,10 +226,18 @@ export class Renderer {
    * Shows a terrain layout on the ground, or plain ground (the albedo slider) for null.
    * Changing the ground re-renders the cube: the cloud pass shades the ground's sun light.
    */
-  setTerrain(terrain: { map: TerrainMap; recipe: TerrainRecipe } | null): void {
+  setTerrain(terrain: { map: TerrainMap; recipe: TerrainRecipe; height?: HeightField } | null): void {
     const data = new Float32Array(GROUND_BYTES / 4);
+    this.terrainOrigin = 0;
     if (terrain) {
-      const { map, recipe } = terrain;
+      const { map, recipe, height } = terrain;
+      if (height && recipe.heightKm > 0) {
+        const halves = new Uint16Array(height.heights.length);
+        for (let i = 0; i < halves.length; i++) halves[i] = toHalf(height.heights[i]);
+        this.device.queue.writeTexture({ texture: this.heightTex }, halves, { bytesPerRow: height.size * 2 }, [height.size, height.size]);
+        this.terrainOrigin = height.atOrigin;
+        data.set([recipe.heightKm, height.atOrigin, recipe.snowKm, 0], 28);
+      }
       const texels = new Uint8Array(map.size * map.size * 4);
       for (let i = 0; i < map.types.length; i++) {
         texels[i * 4] = map.types[i];
@@ -234,7 +251,15 @@ export class Renderer {
       data.set([1, recipe.tileKm, map.size, recipe.seed % 100000], 24);
     }
     this.device.queue.writeBuffer(this.groundBuffer, 0, data);
-    this.pending.add('clouds');
+    // The eye moves with the ground under it, so the sky is recomputed from there too.
+    this.pending.add('sky');
+  }
+
+  /** Shader parameters, with the eye standing on the ground under it (params.anim.y). */
+  private pack(frame: number, quality?: Quality): Float32Array<ArrayBuffer> {
+    const data = packParams(this.settings, frame, quality);
+    data[41] += this.terrainOrigin;
+    return data;
   }
 
   setShapes(shapes: ShapeLayer[]): void {
@@ -286,16 +311,17 @@ export class Renderer {
     if (face === this.allocatedFace) return;
     this.cloudCube?.destroy();
     this.accumBuffer?.destroy();
-    this.cloudCube = this.device.createTexture({
-      size: [face, face, 6], format: 'rgba16float',
-      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
-    });
+    this.groundCube?.destroy();
+    this.groundAccum?.destroy();
+    this.cloudCube = this.createCube(face);
+    this.groundCube = this.createCube(face);
     this.accumBuffer = this.device.createBuffer({ size: 6 * face * face * 8, usage: GPUBufferUsage.STORAGE });
+    this.groundAccum = this.device.createBuffer({ size: 6 * face * face * 8, usage: GPUBufferUsage.STORAGE });
     this.allocatedFace = face;
 
-    this.cloudBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube);
+    this.cloudBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube, this.groundAccum, this.groundCube);
     this.downwellingBindGroup = this.downwellingBindGroupFor(this.cloudCube, this.downwellingBuffer);
-    this.referenceBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube, this.referencePipeline);
+    this.referenceBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube, this.groundAccum, this.groundCube, this.referencePipeline);
     this.displayBindGroup = this.device.createBindGroup({
       layout: this.displayPipeline.getBindGroupLayout(0),
       entries: [
@@ -306,13 +332,22 @@ export class Renderer {
         { binding: 4, resource: this.cloudCube.createView({ dimension: 'cube' }) },
         { binding: 5, resource: this.transmittanceLut.createView() },
         { binding: 6, resource: { buffer: this.downwellingBuffer } },
-        { binding: 7, resource: this.terrainTex.createView() },
         { binding: 8, resource: { buffer: this.groundBuffer } },
+        { binding: 9, resource: this.groundCube.createView({ dimension: 'cube' }) },
       ],
     });
   }
 
-  private cloudBindGroupFor(params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture, pipeline = this.cloudPipeline): GPUBindGroup {
+  private createCube(face: number): GPUTexture {
+    return this.device.createTexture({
+      size: [face, face, 6], format: 'rgba16float',
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+    });
+  }
+
+  private cloudBindGroupFor(
+    params: GPUBuffer, accum: GPUBuffer, cube: GPUTexture, groundAccum: GPUBuffer, groundCube: GPUTexture, pipeline = this.cloudPipeline,
+  ): GPUBindGroup {
     return this.device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
@@ -329,6 +364,9 @@ export class Renderer {
         { binding: 12, resource: this.shadowTex.createView() },
         { binding: 14, resource: this.terrainTex.createView() },
         { binding: 15, resource: { buffer: this.groundBuffer } },
+        { binding: 16, resource: this.heightTex.createView() },
+        { binding: 17, resource: { buffer: groundAccum } },
+        { binding: 18, resource: groundCube.createView({ dimension: '2d-array' }) },
       ],
     });
   }
@@ -367,6 +405,8 @@ export class Renderer {
     this.exporting = true;
     const params = d.createBuffer({ size: PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const accum = d.createBuffer({ size: 6 * face * face * 8, usage: GPUBufferUsage.STORAGE });
+    const groundAccum = d.createBuffer({ size: 6 * face * face * 8, usage: GPUBufferUsage.STORAGE });
+    const groundCube = this.createCube(face);
     const cube = d.createTexture({
       size: [face, face, 6], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     });
@@ -377,16 +417,16 @@ export class Renderer {
     try {
       // Apply any pending sky or weather edits first.
       const prep = d.createCommandEncoder();
-      d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
+      d.queue.writeBuffer(this.paramsBuffer, 0, this.pack(this.cloudFrame));
       this.flushPending(prep);
       d.queue.submit([prep.finish()]);
 
-      const bindGroup = this.cloudBindGroupFor(params, accum, cube);
+      const bindGroup = this.cloudBindGroupFor(params, accum, cube, groundAccum, groundCube);
       const downwellingGroup = this.downwellingBindGroupFor(cube, downwelling);
       const groups = Math.ceil(face / 4 / 8);
       const total = 16 * samples;
       for (let frame = 0; frame < total; frame++) {
-        d.queue.writeBuffer(params, 0, packParams(this.settings, frame, quality));
+        d.queue.writeBuffer(params, 0, this.pack(frame, quality));
         const encoder = d.createCommandEncoder({ label: 'export clouds' });
         const pass = encoder.beginComputePass();
         pass.setPipeline(this.cloudPipeline);
@@ -414,8 +454,8 @@ export class Renderer {
           { binding: 4, resource: this.transmittanceLut.createView() },
           { binding: 5, resource: out.createView() },
           { binding: 6, resource: { buffer: downwelling } },
-          { binding: 7, resource: this.terrainTex.createView() },
           { binding: 8, resource: { buffer: this.groundBuffer } },
+          { binding: 9, resource: groundCube.createView({ dimension: '2d-array' }) },
         ],
       }));
       pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
@@ -431,6 +471,8 @@ export class Renderer {
       out.destroy();
       cube.destroy();
       accum.destroy();
+      groundCube.destroy();
+      groundAccum.destroy();
       params.destroy();
       this.exporting = false;
     }
@@ -540,7 +582,7 @@ export class Renderer {
       this.allocateCloudTargets();
       this.cloudFrame = 0;
     }
-    this.device.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
+    this.device.queue.writeBuffer(this.paramsBuffer, 0, this.pack(this.cloudFrame));
     this.flushPending(encoder);
   }
 
@@ -571,7 +613,7 @@ export class Renderer {
           // writing the next one's.
           d.queue.submit([encoder.finish()]);
           encoder = d.createCommandEncoder();
-          d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
+          d.queue.writeBuffer(this.paramsBuffer, 0, this.pack(this.cloudFrame));
         }
         const time = dispatched === 0 && !!this.timestamps && !this.timestamps.busy;
         this.encodeCloudPass(encoder, time);
@@ -621,7 +663,7 @@ export class Renderer {
       this.prepare(prep);
       d.queue.submit([prep.finish()]);
       while (!this.converged) {
-        d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
+        d.queue.writeBuffer(this.paramsBuffer, 0, this.pack(this.cloudFrame));
         const encoder = d.createCommandEncoder();
         this.encodeCloudPass(encoder, false);
         this.cloudFrame++;
