@@ -51,6 +51,8 @@ const PROFILE_LINEAR: f32 = 0.75;
 const PROFILE_CONSTANT: f32 = 0.25;
 const TURBULENCE_PERIOD_KM: f32 = 5.0;
 const TURBULENCE_DISPLACEMENT_KM: f32 = 0.35;
+// skyCaptain: how fast the turbulence field changes, relative to the shape evolution.
+const TURBULENCE_EVOLUTION: f32 = 0.5;
 // Primary march (qualityPresets 'high'): metres -> km.
 const MIN_STEP_KM: f32 = 0.05;
 const MAX_STEP_KM: f32 = 1.0;
@@ -159,9 +161,12 @@ struct Media {
 fn sample_media(w: Weather, p: vec3f, altitude: f32, mip: f32, jitter: f32) -> Media {
   var density = w.density;
   // Curl-noise turbulence, strongest at the cloud base.
+  // skyCaptain: the turbulence field evolves with time (its slice moves), so ragged bases
+  // morph slowly instead of sliding rigidly with the cloud.
   let turbulence_uv = (p.xz + params.wind.xy) / TURBULENCE_PERIOD_KM;
+  let turbulence_slice = 0.5 + params.anim.x * TURBULENCE_EVOLUTION / TURBULENCE_PERIOD_KM;
   let turbulence = TURBULENCE_DISPLACEMENT_KM
-    * (textureSampleLevel(shape_tex, repeat_sampler, vec3f(turbulence_uv, 0.5), 0.0).gba * 2.0 - 1.0)
+    * (textureSampleLevel(shape_tex, repeat_sampler, vec3f(turbulence_uv, turbulence_slice), 0.0).gba * 2.0 - 1.0)
     * density * remap_clamped(w.hf, 0.3, 0.0);
   // Evolution (Takram): the shape noise scrolls upward through the cloud, so clouds grow and
   // dissolve over an animation instead of only sliding.
@@ -170,7 +175,10 @@ fn sample_media(w: Weather, p: vec3f, altitude: f32, mip: f32, jitter: f32) -> M
   density = remap_clamped(density, (1.0 - shape) * SHAPE_AMOUNT, 1.0);
 
   if (mip * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
-    let dp = (vec3f(p.x + params.wind.z, altitude, p.z + params.wind.w) + turbulence) / params.scale.y;
+    // skyCaptain: detail rides with the cloud and boils upward with the evolution, so in
+    // slow real-time motion turrets rise and fringes churn. Takram drifts detail faster
+    // than the shape, which at real speed reads as texture swimming through the cloud.
+    let dp = (vec3f(p.x + params.wind.x, altitude - params.anim.x, p.z + params.wind.y) + turbulence) / params.scale.y;
     let detail = textureSampleLevel(detail_tex, repeat_sampler, dp, 0.0).r;
     // Fluffy at the top and whippy at the bottom.
     let modifier = mix(pow(detail, 6.0), 1.0 - detail, remap_clamped(w.hf, 0.2, 0.4)) * params.cloud.w;
