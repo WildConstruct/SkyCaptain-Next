@@ -19,6 +19,9 @@ struct View {
 // Declared for ground.wgsl; unused here (the cloud pass reads the layout).
 @group(0) @binding(7) var terrain_tex: texture_2d<f32>;
 @group(0) @binding(8) var<uniform> ground: Ground;
+// Wind waves (ocean.wgsl), for the water's mirror.
+@group(0) @binding(10) var ocean_tex: texture_2d_array<f32>;
+@group(0) @binding(11) var ocean_sampler: sampler;
 // What the cloud pass saw of the ground per direction (clouds.wgsl GroundHit).
 @group(0) @binding(9) var ground_tex: texture_cube<f32>;
 
@@ -27,6 +30,8 @@ struct View {
 // the ground in this direction (albedo through the air and the clouds in front), plus on
 // water the mirror of the finished sky and clouds. Water lies at sea level, so its point is
 // the sea-level hit; relief in front has already zeroed the water share.
+const WATER_TAPS: i32 = 8;
+
 fn ground_ambient(dir: vec3f) -> vec3f {
   let seen = textureSampleLevel(ground_tex, cube_sampler, dir, 0.0);
   var light = seen.rgb / PI * downwelling.rgb;
@@ -41,13 +46,30 @@ fn ground_ambient(dir: vec3f) -> vec3f {
           / max(textureSampleLevel(transmittance_lut, cube_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
         vec3f(0.0), vec3f(1.0));
       let g = vec3f(0.0, eye_r, 0.0) + dir * t;
-      let n = water_normal(g.xz, normalize(g));
-      var r = reflect(dir, n);
-      // Waves can tip a reflection below the horizon: fold it back up.
-      if (dot(r, normalize(g)) < 0.0) { r = reflect(r, normalize(g)); }
-      let cloud = textureSampleLevel(cloud_tex, cube_sampler, r, 0.0);
-      let mirrored = textureSampleLevel(sky_tex, cube_sampler, r, 0.0).rgb * cloud.a + cloud.rgb;
-      light += water_fresnel(dot(-dir, n)) * mirrored * air * seen.a;
+      let up = normalize(g);
+      // The same surface the cloud pass lit: footprint of one cube texel (clouds.wgsl).
+      let footprint = t * 1000.0 * (0.5 * PI / params.march.z) / sqrt(max(abs(dot(dir, up)), 0.01));
+      let w = water_surface(g.xz, up, footprint);
+      let n = w.normal;
+      var mirrored = vec3f(0.0);
+      // The reflection through a GGX lobe as wide as the hidden waves: a fixed spiral of taps
+      // around the mirror direction, so distant water reflects a soft sky band, not speckle.
+      let r0 = reflect(dir, n);
+      let bx = normalize(cross(r0, up + vec3f(1e-3, 0.0, 0.0)));
+      let by = cross(r0, bx);
+      for (var i = 0; i < WATER_TAPS; i++) {
+        let a = (f32(i) + 0.5) / f32(WATER_TAPS);
+        let spin = f32(i) * 2.39996;
+        var r = normalize(r0 + (bx * cos(spin) + by * sin(spin)) * w.alpha * sqrt(a));
+        // Waves can tip a reflection below the horizon: bend it back up along the surface
+        // (ABYSSAL OceanMesh.js), toward the bright band just above the horizon.
+        let below = dot(r, up);
+        if (below < 0.0) { r = normalize(r + up * (mix(0.02, 0.35, sqrt(w.alpha)) - below * 1.15)); }
+        let cloud = textureSampleLevel(cloud_tex, cube_sampler, r, 0.0);
+        mirrored += textureSampleLevel(sky_tex, cube_sampler, r, 0.0).rgb * cloud.a + cloud.rgb;
+      }
+      mirrored /= f32(WATER_TAPS);
+      light += water_fresnel(max(dot(-dir, n), 1e-4)) * mirrored * air * seen.a;
     }
   }
   return light;

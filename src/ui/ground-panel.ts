@@ -3,7 +3,7 @@
 import type { GroundStore } from '../ground';
 import { TERRAIN_TYPES, type TerrainRecipe } from '../terrain';
 
-type RecipeNumber = 'waterLevel' | 'relief' | 'patchKm' | 'tileKm' | 'heightKm' | 'ridges' | 'snowKm';
+type RecipeNumber = 'waterLevel' | 'relief' | 'patchKm' | 'tileKm' | 'heightKm' | 'ridges' | 'snowKm' | 'waveWindMs' | 'waveFetchKm';
 
 const SLIDERS: { key: RecipeNumber; label: string; min: number; max: number; step: number; unit?: string; hint: string }[] = [
   { key: 'waterLevel', label: 'Water', min: 0, max: 0.9, step: 0.01, hint: 'How much low ground is flooded: lakes, then coasts, then sea' },
@@ -13,6 +13,8 @@ const SLIDERS: { key: RecipeNumber; label: string; min: number; max: number; ste
   { key: 'heightKm', label: 'Height', min: 0, max: 8, step: 0.05, unit: 'km', hint: 'Highest ground: 0 is flat, a few tenths rolling hills, several km mountains' },
   { key: 'ridges', label: 'Ridges', min: 0, max: 1, step: 0.01, hint: 'Rounded hills (0) to sharp ridged ranges (1)' },
   { key: 'snowKm', label: 'Snow line', min: 0, max: 9, step: 0.05, unit: 'km', hint: 'Altitude above which snow lies on gentler slopes' },
+  { key: 'waveWindMs', label: 'Wind on water', min: 0, max: 25, step: 0.5, unit: 'm/s', hint: 'Glassy at 1, choppy at 6, whitecaps past 8' },
+  { key: 'waveFetchKm', label: 'Fetch', min: 1, max: 500, step: 1, unit: 'km', hint: 'Open water the wind blows across: a lake is a few km, the sea hundreds' },
 ];
 
 export class GroundPanel {

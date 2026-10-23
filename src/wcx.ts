@@ -61,6 +61,7 @@ export const PARAM_UUIDS: Record<Exclude<keyof Settings, 'quality'>, string> = {
   powder: '0e1df7bb-0332-429e-9e97-26cdf44fdf8f',
   seed: '1418556b-6c08-4b53-a955-e92946a62558',
   evolve: '563b1dc2-cbed-4790-bb05-644aea19e058',
+  sceneTime: '7436de65-3130-401a-94da-369a663e5d30',
   eyeAltitude: '836b5b17-42db-46da-9746-68dd39860b93',
   ev: '94ed5b53-2aa0-4bef-b3e3-b7816caa0e07',
   fov: '377bbaf9-8c1a-4d97-90fc-4809b880c6ca',

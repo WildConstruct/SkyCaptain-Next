@@ -49,6 +49,12 @@ export interface TerrainRecipe {
   ridges: number;
   /** Altitude above which snow lies on gentle slopes, km. */
   snowKm: number;
+  /** Wind over the water, m/s (ocean.ts): glassy at 1, whitecaps past ~8. */
+  waveWindMs: number;
+  /** Compass heading the waves run toward, degrees. */
+  waveHeadingDeg: number;
+  /** Open water the wind blows across, km: a lake's few, the sea's hundreds. */
+  waveFetchKm: number;
 }
 
 export const DEFAULT_TERRAIN: TerrainRecipe = {
@@ -60,7 +66,8 @@ export const DEFAULT_TERRAIN: TerrainRecipe = {
   patchKm: 6,
   cohesion: 2,
   palette: {
-    water: [0.02, 0.035, 0.045],
+    // Water: the body's reflectance (light scattered back out of the volume), deep blue.
+    water: [0.006, 0.018, 0.028],
     sand: [0.42, 0.37, 0.27],
     meadow: [0.14, 0.2, 0.07],
     fields: [0.22, 0.21, 0.11],
@@ -70,6 +77,9 @@ export const DEFAULT_TERRAIN: TerrainRecipe = {
   heightKm: 0,
   ridges: 0.6,
   snowKm: 2.8,
+  waveWindMs: 6,
+  waveHeadingDeg: 70,
+  waveFetchKm: 40,
 };
 
 /** Grid side, tiles. At the default 1 km tile the ground repeats every 128 km. */
@@ -446,6 +456,9 @@ export function parseTerrain(raw: unknown): TerrainRecipe {
     heightKm: num(r.heightKm, d.heightKm, 0, 8),
     ridges: num(r.ridges, d.ridges, 0, 1),
     snowKm: num(r.snowKm, d.snowKm, 0, 9),
+    waveWindMs: num(r.waveWindMs, d.waveWindMs, 0, 40),
+    waveHeadingDeg: num(r.waveHeadingDeg, d.waveHeadingDeg, -360, 360),
+    waveFetchKm: num(r.waveFetchKm, d.waveFetchKm, 0.5, 2000),
   };
 }
 

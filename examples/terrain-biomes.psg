@@ -222,7 +222,7 @@
      "weight": 10,
      "meta": {
       "set": {
-       "ground.colour.water": "#27353c",
+       "ground.colour.water": "#12242f",
        "ground.colour.sand": "#ada48e",
        "ground.colour.meadow": "#697c4b",
        "ground.colour.fields": "#817e5d",
@@ -237,7 +237,7 @@
      "weight": 6,
      "meta": {
       "set": {
-       "ground.colour.water": "#273338",
+       "ground.colour.water": "#12232c",
        "ground.colour.sand": "#b1a68e",
        "ground.colour.meadow": "#7c7e50",
        "ground.colour.fields": "#a69765",
@@ -252,7 +252,7 @@
      "weight": 5,
      "meta": {
       "set": {
-       "ground.colour.water": "#273035",
+       "ground.colour.water": "#122127",
        "ground.colour.sand": "#aaa08b",
        "ground.colour.meadow": "#76734b",
        "ground.colour.fields": "#7c6c50",
@@ -267,7 +267,7 @@
      "weight": 5,
      "meta": {
       "set": {
-       "ground.colour.water": "#27353c",
+       "ground.colour.water": "#14272e",
        "ground.colour.sand": "#ada48e",
        "ground.colour.meadow": "#618645",
        "ground.colour.fields": "#6f7c50",

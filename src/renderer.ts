@@ -1,5 +1,7 @@
 import commonWgsl from './shaders/common.wgsl?raw';
 import groundWgsl from './shaders/ground.wgsl?raw';
+import oceanWgsl from './shaders/ocean.wgsl?raw';
+import { OCEAN_N, OCEAN_SCALES, oceanNoise, packOcean } from './ocean';
 import noiseWgsl from './shaders/noise.wgsl?raw';
 import noiseBakeWgsl from './shaders/noise-bake.wgsl?raw';
 import weatherWgsl from './shaders/weather.wgsl?raw';
@@ -20,8 +22,10 @@ const PARAMS_BYTES = 176;
 export const WEATHER_SIZE = 1024;
 /** Largest terrain grid the ground texture holds. */
 const TERRAIN_TEXTURE_MAX = 256;
-/** Ground uniform (ground.wgsl Ground): 6 palette vec4s and two info vec4s. */
-const GROUND_BYTES = 8 * 16;
+/** Ground uniform (ground.wgsl Ground): 6 palette vec4s, info, relief and waves. */
+const GROUND_BYTES = 9 * 16;
+/** Ocean slope texture mip levels (256 down to 1). */
+const OCEAN_MIPS = Math.log2(OCEAN_N) + 1;
 /** GPU time per display frame spent on cloud passes, ms (the rest is left for the page). */
 const FRAME_BUDGET_MS = 10;
 const MAX_PASSES_PER_FRAME = 32;
@@ -69,6 +73,14 @@ export class Renderer {
   private heightTex: GPUTexture;
   /** Ground height under the eye, km: the eye stands this much higher above sea level. */
   private terrainOrigin = 0;
+  /** Wind waves (ocean.wgsl): solved again when the waves or the scene time change. */
+  private ocean!: {
+    params: GPUBuffer; noise: GPUBuffer; fields: GPUBuffer; slopes: GPUTexture;
+    spectrum: GPUComputePipeline; rows: GPUComputePipeline; cols: GPUComputePipeline; pack: GPUComputePipeline; mips: GPUComputePipeline;
+    groups: { spectrum: GPUBindGroup; fft: [GPUBindGroup, GPUBindGroup]; pack: GPUBindGroup; mips: GPUBindGroup[] };
+  };
+  private waves = { windMs: 6, headingDeg: 70, fetchKm: 40 };
+  private oceanKey = '';
   private layerTex: Record<LayerName, GPUTexture>;
   private shapes: ShapeLayer[] = [];
   private transmittanceLut: GPUTexture;
@@ -184,6 +196,7 @@ export class Renderer {
     this.exportPipeline = compute(module(groundWgsl + '\n' + exportWgsl, 'export'), 'composite');
     this.downwellingPipeline = compute(module(downwellingWgsl, 'downwelling'), 'integrate');
     this.shadowPipeline = compute(cloudModule, 'ground_shadow');
+    this.createOcean(module(oceanWgsl, 'ocean'), compute);
     this.shadowTex = device.createTexture({ size: [512, 512], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
     this.downwellingBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     this.displayPipeline = device.createRenderPipeline({
@@ -248,11 +261,81 @@ export class Renderer {
       }
       this.device.queue.writeTexture({ texture: this.terrainTex }, texels, { bytesPerRow: map.size * 4 }, [map.size, map.size]);
       TERRAIN_TYPES.forEach((t, i) => data.set(recipe.palette[t], i * 4));
+      this.waves = { windMs: recipe.waveWindMs, headingDeg: recipe.waveHeadingDeg, fetchKm: recipe.waveFetchKm };
+      data.set([...OCEAN_SCALES, recipe.waveWindMs], 32);
       data.set([1, recipe.tileKm, map.size, recipe.seed % 100000], 24);
     }
     this.device.queue.writeBuffer(this.groundBuffer, 0, data);
     // The eye moves with the ground under it, so the sky is recomputed from there too.
     this.pending.add('sky');
+  }
+
+  private createOcean(m: GPUShaderModule, compute: (m: GPUShaderModule, entry: string) => GPUComputePipeline): void {
+    const d = this.device;
+    const n = OCEAN_N;
+    const params = d.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const noise = d.createBuffer({ size: 3 * n * n * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    d.queue.writeBuffer(noise, 0, oceanNoise());
+    const fields = d.createBuffer({ size: 9 * n * n * 8, usage: GPUBufferUsage.STORAGE });
+    const slopes = d.createTexture({
+      size: [n, n, 3], format: 'rgba16float', mipLevelCount: OCEAN_MIPS,
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const spectrum = compute(m, 'spectrum');
+    const rows = compute(m, 'fft_rows');
+    const cols = compute(m, 'fft_cols');
+    const pack = compute(m, 'pack');
+    const mips = compute(m, 'mips');
+    const level = (l: number) => slopes.createView({ dimension: '2d-array', baseMipLevel: l, mipLevelCount: 1 });
+    this.ocean = {
+      params, noise, fields, slopes, spectrum, rows, cols, pack, mips,
+      groups: {
+        spectrum: d.createBindGroup({ layout: spectrum.getBindGroupLayout(0), entries: [
+          { binding: 0, resource: { buffer: params } }, { binding: 1, resource: { buffer: noise } }, { binding: 2, resource: { buffer: fields } },
+        ] }),
+        fft: [rows, cols].map((p) => d.createBindGroup({ layout: p.getBindGroupLayout(0), entries: [{ binding: 2, resource: { buffer: fields } }] })) as [GPUBindGroup, GPUBindGroup],
+        pack: d.createBindGroup({ layout: pack.getBindGroupLayout(0), entries: [
+          { binding: 0, resource: { buffer: params } }, { binding: 2, resource: { buffer: fields } }, { binding: 3, resource: level(0) },
+        ] }),
+        mips: Array.from({ length: OCEAN_MIPS - 1 }, (_, l) => d.createBindGroup({ layout: mips.getBindGroupLayout(0), entries: [
+          { binding: 4, resource: level(l) }, { binding: 5, resource: level(l + 1) },
+        ] })),
+      },
+    };
+  }
+
+  /** Solves the waves for the current scene time when they or the time changed. */
+  private runOcean(encoder: GPUCommandEncoder): void {
+    const key = JSON.stringify([this.waves, this.settings.sceneTime]);
+    if (key === this.oceanKey) return;
+    this.oceanKey = key;
+    const o = this.ocean;
+    const n = OCEAN_N;
+    this.device.queue.writeBuffer(o.params, 0, packOcean(this.waves, this.settings.sceneTime));
+    const pass = encoder.beginComputePass({ label: 'ocean' });
+    pass.setPipeline(o.spectrum);
+    pass.setBindGroup(0, o.groups.spectrum);
+    pass.dispatchWorkgroups(n / 8, n / 8, 3);
+    pass.setPipeline(o.rows);
+    pass.setBindGroup(0, o.groups.fft[0]);
+    pass.dispatchWorkgroups(n, 9);
+    pass.setPipeline(o.cols);
+    pass.setBindGroup(0, o.groups.fft[1]);
+    pass.dispatchWorkgroups(n, 9);
+    pass.setPipeline(o.pack);
+    pass.setBindGroup(0, o.groups.pack);
+    pass.dispatchWorkgroups(n / 8, n / 8, 3);
+    pass.setPipeline(o.mips);
+    for (let l = 1; l < OCEAN_MIPS; l++) {
+      pass.setBindGroup(0, o.groups.mips[l - 1]);
+      const size = n >> l;
+      pass.dispatchWorkgroups(Math.ceil(size / 8), Math.ceil(size / 8), 3);
+    }
+    pass.end();
+  }
+
+  private oceanView(): GPUTextureView {
+    return this.ocean.slopes.createView({ dimension: '2d-array' });
   }
 
   /** Shader parameters, with the eye standing on the ground under it (params.anim.y). */
@@ -334,6 +417,8 @@ export class Renderer {
         { binding: 6, resource: { buffer: this.downwellingBuffer } },
         { binding: 8, resource: { buffer: this.groundBuffer } },
         { binding: 9, resource: this.groundCube.createView({ dimension: 'cube' }) },
+        { binding: 10, resource: this.oceanView() },
+        { binding: 11, resource: this.repeatSampler },
       ],
     });
   }
@@ -367,6 +452,8 @@ export class Renderer {
         { binding: 16, resource: this.heightTex.createView() },
         { binding: 17, resource: { buffer: groundAccum } },
         { binding: 18, resource: groundCube.createView({ dimension: '2d-array' }) },
+        { binding: 19, resource: this.oceanView() },
+        { binding: 20, resource: this.repeatSampler },
       ],
     });
   }
@@ -456,6 +543,8 @@ export class Renderer {
           { binding: 6, resource: { buffer: downwelling } },
           { binding: 8, resource: { buffer: this.groundBuffer } },
           { binding: 9, resource: groundCube.createView({ dimension: '2d-array' }) },
+          { binding: 10, resource: this.oceanView() },
+          { binding: 11, resource: this.repeatSampler },
         ],
       }));
       pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
@@ -479,6 +568,7 @@ export class Renderer {
   }
 
   private flushPending(encoder: GPUCommandEncoder): void {
+    this.runOcean(encoder);
     if (this.pending.has('sky')) this.runSky(encoder);
     if (this.pending.has('weather')) {
       this.device.queue.writeBuffer(this.shapesBuffer, 0, packShapes(this.shapes, this.settings.baseWeather));

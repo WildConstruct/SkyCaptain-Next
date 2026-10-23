@@ -50,6 +50,8 @@ export interface Settings {
   evolve: number;
   /** Eye height above the ground, km: from standing on the ground to above the clouds. */
   eyeAltitude: number;
+  /** Scene time, seconds: the waves' clock (animation sets it; a still is time 0). */
+  sceneTime: number;
   ev: number;
   fov: number;
   yaw: number;
@@ -88,6 +90,7 @@ export const DEFAULTS: Settings = {
   seed: 1,
   evolve: 0,
   eyeAltitude: 0,
+  sceneTime: 0,
   ev: 0,
   fov: 80,
   yaw: 20,

@@ -4,12 +4,15 @@
 // they all shade the same ground. Modules that include this declare:
 //   terrain_tex: texture_2d<f32>  r = type index / 255, g = per-tile random, b = elevation
 //   ground: Ground (uniform)
-// Evaluated once per ground pixel, never per march step.
+// Evaluated once per ground pixel, never per march step. Water also needs:
+//   ocean_tex: texture_2d_array<f32> (ocean.wgsl: slope, squared slope, folding; mipmapped)
+//   ocean_sampler: sampler (repeat, linear)
 
 struct Ground {
   palette: array<vec4f, 6>, // linear albedo per type (rgb)
   info: vec4f,              // x = terrain on (0/1), y = tile size (km), z = grid side (tiles), w = seed
   relief: vec4f,            // x = highest ground (km, 0 = flat), y = ground height under the eye (km), z = snow line (km)
+  waves: vec4f,             // tile size of ocean cascades 0..2 (m), wind over the water (m/s)
 }
 
 const T_WATER: u32 = 0u;
@@ -108,18 +111,56 @@ fn ground_surface(xz: vec2f) -> Surface {
   return s;
 }
 
-// Wind-roughened water: the local up (up, at the ground point on the planet) tilted by
-// two octaves of noise slope.
-fn water_normal(xz: vec2f, up: vec3f) -> vec3f {
-  let e = 0.002;
-  let h0 = gfbm(xz / 0.02, 81u);
-  let hx = gfbm((xz + vec2f(e, 0.0)) / 0.02, 81u);
-  let hz = gfbm((xz + vec2f(0.0, e)) / 0.02, 81u);
-  let slope = vec2f(hx - h0, hz - h0) / e * 0.004;
+// Open water from the spectral ocean (ocean.wgsl): the mean slope over a footprint of
+// `footprint` metres, and the slope variance the footprint hides, which becomes roughness.
+// Ported in spirit from the ABYSSAL / natural-disasters ocean (MIT): only the waves a pixel
+// resolves bend its normal; the rest widen its highlight (Cox-Munk, LEAN-style).
+struct Water {
+  normal: vec3f,
+  alpha: f32,   // GGX roughness (alpha = sqrt(2 x mean square slope))
+  fold: f32,    // mean Jacobian: below ~0.6 the surface is folding over (whitecaps)
+}
+
+fn water_surface(xz: vec2f, up: vec3f, footprint: f32) -> Water {
+  let p = xz * 1000.0;
+  var slope = vec2f(0.0);
+  var hidden = 0.0;
+  var fold = 1.0;
+  for (var c = 0; c < 3; c++) {
+    let tile = ground.waves[c];
+    let texel = tile / f32(textureDimensions(ocean_tex).x);
+    let lod = clamp(log2(max(footprint / texel, 1.0)), 0.0, f32(textureNumLevels(ocean_tex) - 1));
+    let s = textureSampleLevel(ocean_tex, ocean_sampler, p / tile, c, lod);
+    slope += s.xy;
+    hidden += max(s.z - dot(s.xy, s.xy), 0.0);
+    fold = min(fold, s.w);
+  }
+  // Capillary ripples shorter than the finest cascade still roughen the surface: about
+  // half of the Cox-Munk mean square slope for this wind lives there.
+  let capillary = 0.5 * (0.003 + 0.00512 * ground.waves.w);
+  var w: Water;
   let tx = normalize(cross(vec3f(0.0, 0.0, 1.0), up));
   let tz = cross(up, tx);
-  return normalize(up - slope.x * tx - slope.y * tz);
+  w.normal = normalize(up - slope.x * tx - slope.y * tz);
+  w.alpha = clamp(sqrt(2.0 * (hidden + capillary)), 0.012, 0.62);
+  w.fold = fold;
+  return w;
 }
+
+// GGX normal distribution and height-correlated Smith visibility.
+fn ggx_d(noh: f32, a: f32) -> f32 {
+  let a2 = a * a;
+  let d = noh * noh * (a2 - 1.0) + 1.0;
+  return a2 / (PI * d * d);
+}
+
+fn smith_vis(nov: f32, nol: f32, a: f32) -> f32 {
+  let a2 = a * a;
+  let gv = nol * sqrt(nov * nov * (1.0 - a2) + a2);
+  let gl = nov * sqrt(nol * nol * (1.0 - a2) + a2);
+  return 0.5 / max(gv + gl, 1e-5);
+}
+
 
 // Schlick Fresnel for water (f0 = 0.02).
 fn water_fresnel(cos_theta: f32) -> f32 {

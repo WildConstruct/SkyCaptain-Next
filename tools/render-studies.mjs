@@ -34,6 +34,19 @@ const STUDIES = [
     sky: { sunElevation: 14, sunIntensity: 16, haze: 22, ambient: 0.55, forwardG: 0.75, powder: 1, density: 400, coverage: 0.34, typeBias: 0.15 },
     anim: { timeLapse: 3 },
   },
+  // Water (terrain on, mostly sea; waves run on scene time).
+  {
+    name: 'sea-glitter-1x', hint: 'Open sea toward a low sun at real speed, from 30 m',
+    sky: { terrain: 1, terrainWater: 0.7, eyeAltitude: 0.03, pitch: -4, fov: 45, sunElevation: 8, sunAzimuth: 20 }, anim: { timeLapse: 1 },
+  },
+  {
+    name: 'sea-midday-1x', hint: 'Open sea at midday, sun behind, at real speed, from 30 m',
+    sky: { terrain: 1, terrainWater: 0.7, eyeAltitude: 0.03, pitch: -6, fov: 60, sunElevation: 45, sunAzimuth: 200 }, anim: { timeLapse: 1 },
+  },
+  {
+    name: 'lake-mountains-1x', hint: 'A lake under a mountain range at real speed, long lens, from the shore',
+    sky: { terrain: 1, terrainWater: 0.4, terrainHeight: 2.5, terrainRidges: 0.8, pitch: 2, fov: 30, sunElevation: 12, sunAzimuth: 150 }, anim: { timeLapse: 1 },
+  },
 ];
 
 mkdirSync('shots/studies', { recursive: true });

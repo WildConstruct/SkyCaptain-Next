@@ -146,6 +146,8 @@ export function settingsAt(base: Settings, a: Animation, t: number): Settings {
   // One shape period of vertical scroll per cloud life turns the clouds over completely.
   const sceneMinutes = (t * a.timeLapse) / 60;
   s.evolve = base.evolve + (a.cloudLife > 0 ? (sceneMinutes / a.cloudLife) * base.shapeScale : 0);
+  // The waves run on scene time.
+  s.sceneTime = base.sceneTime + t * a.timeLapse;
   return s;
 }
 

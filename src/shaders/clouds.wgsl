@@ -25,6 +25,9 @@
 // What the view saw of the ground, for the composite (see render()).
 @group(0) @binding(17) var<storage, read_write> ground_accum: array<vec2u>;
 @group(0) @binding(18) var ground_out: texture_storage_2d_array<rgba16float, write>;
+// Wind waves (ocean.wgsl).
+@group(0) @binding(19) var ocean_tex: texture_2d_array<f32>;
+@group(0) @binding(20) var ocean_sampler: sampler;
 
 const BAYER_OFFSETS = array<vec2u, 16>(
   vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
@@ -450,8 +453,8 @@ fn ground_radiance(o: vec3f, dir: vec3f, t_ground: f32, jitter: vec3f) -> Ground
   let albedo = layered_albedo(surface, g.xz, height, slope);
   let cos_sun = dot(n, sun);
   var direct = vec3f(0.0);
-  var glint = vec3f(0.0);
-  if (cos_sun > 0.0 && dot(up, sun) > -0.05) {
+  var sun_at_ground = vec3f(0.0);
+  if ((cos_sun > 0.0 || surface.water > 0.0) && dot(up, sun) > -0.05) {
     var shadow = textureSampleLevel(shadow_tex, clamp_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0).r;
     // skyCaptain: the shadow map is sea-level ground near the eye; elsewhere (far ground,
     // or relief, which lifts the ground into the clouds) march the cloud shadow directly.
@@ -459,17 +462,8 @@ fn ground_radiance(o: vec3f, dir: vec3f, t_ground: f32, jitter: vec3f) -> Ground
       shadow = exp(-layer_optical_depth(g, sun, DISTANT_SHADOW_STEPS, jitter.x));
     }
     shadow *= terrain_shadow(g, sun, jitter.z);
-    let sun_at_ground = illum * transmittance_lut_at(length(g), max(dot(up, sun), 0.0)) * shadow;
-    direct = sun_at_ground * cos_sun;
-    if (surface.water > 0.0) {
-      // Sun glint on the waves (normalized Blinn-Phong); sky and cloud reflections are
-      // added at composite time from the finished cubes.
-      let nw = water_normal(g.xz, up);
-      let h = normalize(sun - dir);
-      let shine = 400.0;
-      glint = sun_at_ground * water_fresnel(dot(h, -dir)) * (shine + 8.0) / (8.0 * PI)
-        * pow(max(dot(nw, h), 0.0), shine) * surface.water;
-    }
+    sun_at_ground = illum * transmittance_lut_at(length(g), max(dot(up, sun), 0.0)) * shadow;
+    direct = sun_at_ground * max(cos_sun, 0.0);
   }
   // skyCaptain: the ground's sky light is normally integrated from the finished cube at
   // composite time (the ground buffer below carries what it needs), which is right for
@@ -485,11 +479,57 @@ fn ground_radiance(o: vec3f, dir: vec3f, t_ground: f32, jitter: vec3f) -> Ground
   }
   let air = air_between(o, g, dir);
   var hit: GroundHit;
-  hit.radiance = air * (albedo / PI * direct + glint);
+  if (surface.water > 0.0) {
+    hit.radiance = air * water_radiance(g, up, dir, t_ground, sun, sun_at_ground);
+    // The mirror of the finished sky and clouds is added at composite time.
+    hit.gbuffer = vec4f(0.0, 0.0, 0.0, 1.0);
+    return hit;
+  }
+  hit.radiance = air * albedo / PI * direct;
   // Slopes facing away see less sky: a simple sky-view term from the normal.
   let sky_view = 0.5 + 0.5 * dot(n, up);
-  hit.gbuffer = vec4f(albedo * air * (1.0 - above) * sky_view, surface.water);
+  hit.gbuffer = vec4f(albedo * air * (1.0 - above) * sky_view, 0.0);
   return hit;
+}
+
+// Size of a cube texel seen from the eye, radians (a face spans 90 degrees).
+fn texel_angle() -> f32 { return 0.5 * PI / params.march.z; }
+
+// A pixel's footprint on the water, metres: stretched along the view at grazing angles,
+// taken as the equal-area width (as the ABYSSAL ocean does) so the light it reflects is
+// averaged honestly.
+fn water_footprint(t_km: f32, dir: vec3f, up: vec3f) -> f32 {
+  return t_km * 1000.0 * texel_angle() / sqrt(max(abs(dot(dir, up)), 0.01));
+}
+
+// Water as the ABYSSAL ocean shades it (OceanMesh.js), less what the composite adds: sun
+// specular (GGX with the sun disc's width) and the body of the water, lit by the beam that
+// gets through the surface and by the sky. The mirror of the sky and clouds comes later.
+fn water_radiance(g: vec3f, up: vec3f, dir: vec3f, t: f32, sun: vec3f, sun_at_ground: vec3f) -> vec3f {
+  let w = water_surface(g.xz, up, water_footprint(t, dir, up));
+  let v = -dir;
+  let nov = max(dot(w.normal, v), 1e-4);
+  let f = water_fresnel(nov);
+  var spec = vec3f(0.0);
+  let nol = dot(w.normal, sun);
+  if (nol > 0.0) {
+    let h = normalize(sun + v);
+    let disc = clamp(w.alpha + params.sun_color.w * 0.5, 0.0, 1.0);
+    let widen = (w.alpha * w.alpha) / (disc * disc);
+    let fs = 0.02 + 0.98 * pow(1.0 - max(dot(v, h), 1e-4), 5.0);
+    spec = sun_at_ground * ggx_d(max(dot(w.normal, h), 0.0), disc) * smith_vis(nov, nol, w.alpha) * fs * nol * widen;
+  }
+  // Sky light under the surface, E / pi: the zenith and the horizon band.
+  let sky_top = textureSampleLevel(sky_tex, clamp_sampler, vec3f(0.0, 1.0, 0.0), 0.0).rgb;
+  let sky_side = textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(1.0, 0.25, 0.0)), 0.0).rgb;
+  let sky = sky_top * 0.5 + sky_side * 0.5;
+  let sun_up = max(dot(up, sun), 0.0);
+  let beam = sun_at_ground * sun_up * (1.0 - water_fresnel(max(sun_up, 1e-3))) / PI;
+  // The body's colour is the terrain palette's water: what the volume sends back out per
+  // unit of downwelling light (a few percent, peaking in the blue for deep water).
+  let scatter = ground.palette[0].rgb;
+  let body = scatter * (beam + sky * 0.94) + scatter * 0.3 * sky;
+  return (1.0 - f) * body + spec;
 }
 
 struct MarchResult {
