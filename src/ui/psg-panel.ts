@@ -5,12 +5,12 @@ import { SkyGraph } from '../psg';
 import { ShapeStore, labelFor } from '../shapes';
 
 export interface PsgPanelOptions {
-  example: { name: string; title: string; text: string };
+  example: { name: string; label: string; title: string; text: string };
   hint: string;
 }
 
 const SKY_GRAPH: PsgPanelOptions = {
-  example: { name: 'weather regimes', title: 'Weather regimes × time of day', text: exampleGraph },
+  example: { name: 'weather regimes', label: 'Example graph', title: 'Weather regimes × time of day', text: exampleGraph },
   hint: 'A Prompt Spaghetti graph can roll whole skies: shapes, clouds and sun. Reroll keeps anything you hold.',
 };
 
@@ -50,7 +50,7 @@ export class PsgPanel {
     load.textContent = 'Load .psg…';
     load.onclick = () => file.click();
     const example = document.createElement('button');
-    example.textContent = 'Example graph';
+    example.textContent = this.options.example.label;
     example.title = this.options.example.title;
     example.onclick = () => this.run(async () => { this.error = ''; await g.load(this.options.example.name, this.options.example.text); });
     actions.append(load, example, file);

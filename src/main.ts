@@ -349,7 +349,7 @@ async function main(): Promise<void> {
   groundGraphRoot.className = 'subpanel';
   groundRoot.append(groundGraphRoot);
   new PsgPanel(groundGraphRoot, groundGraph, store, {
-    example: { name: 'terrain biomes', title: 'Landscapes × seasons', text: terrainGraph },
+    example: { name: 'terrain biomes', label: 'Terrain example', title: 'Landscapes × seasons', text: terrainGraph },
     hint: 'A ground graph rolls terrain: landscape, water, geography and palette (ground.* variables).',
   });
   Object.assign(window, { skyGroundGraph: groundGraph });

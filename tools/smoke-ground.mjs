@@ -29,7 +29,7 @@ assert.equal(await page.evaluate(() => window.skyGround.enabled), false, 'terrai
 const plain = await meanBelow();
 
 // 1. The example ground graph turns terrain on with a recipe from its ranges.
-await page.locator('details:has(summary:text("Ground")) button', { hasText: 'Example graph' }).click();
+await page.getByRole('button', { name: 'Terrain example' }).click();
 await page.waitForFunction(() => window.skyGround.enabled);
 let state = await page.evaluate(() => ({ recipe: window.skyGround.recipe, caption: window.skyGroundGraph.last.caption, types: Array.from(window.skyGround.map.types.slice(0, 4096)) }));
 assert.ok(state.recipe.waterLevel >= 0 && state.recipe.waterLevel <= 0.6, `water level ${state.recipe.waterLevel}`);
