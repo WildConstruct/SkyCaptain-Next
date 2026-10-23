@@ -440,7 +440,6 @@ export class Renderer {
       entries: [
         { binding: 0, resource: { buffer: this.paramsBuffer } },
         { binding: 1, resource: this.repeatSampler },
-        { binding: 2, resource: this.clampSampler },
         { binding: 3, resource: this.shapeTex.createView() },
         { binding: 4, resource: this.detailTex.createView() },
         { binding: 5, resource: this.weatherTex.createView() },
