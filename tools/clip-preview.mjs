@@ -1,5 +1,5 @@
-// Renders a camera-view preview clip of an animation: each frame is converged in the
-// viewport at its animation time, then captured. For looking at motion, not for delivery
+// Renders a camera-view preview clip of an animation: each frame is converged at full GPU
+// speed at its animation time (window.skyConverge), then captured. For looking at motion, not for delivery
 // (use Export sequence for that). An .mp4 (H.264, needs ffmpeg) plays every frame at the
 // animation's frame rate, which is what judging motion needs; a .gif shows a few sampled
 // frames (needs python3 with Pillow).
@@ -7,7 +7,7 @@
 //        [shape layers JSON] [width]
 // Frames default to all of them for .mp4 and 12 for .gif.
 import { chromium } from 'playwright-core';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -55,29 +55,50 @@ const all = Math.max(1, Math.round(duration * fps));
 const frames = framesArg === undefined || framesArg === 'all' ? (mp4 ? all : 12) : Number(framesArg);
 const paths = [];
 const started = Date.now();
+// Video: raw RGBA frames stream straight into ffmpeg, no PNG round trip.
+let ffmpeg = null;
+let ffmpegDone = null;
+if (mp4) {
+  ffmpeg = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${width}x${height}`,
+    '-framerate', String(fps), '-i', '-', '-c:v', 'libx264', '-preset', 'slow', '-crf', '14', '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart', out], { stdio: ['pipe', 'inherit', 'inherit'] });
+  ffmpegDone = new Promise((resolve, reject) => ffmpeg.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)))));
+}
+let renderSeconds = 0;
 for (let i = 0; i < frames; i++) {
   // Every frame at its own time for video; evenly sampled across the clip otherwise.
   const t = mp4 && frames === all ? i / fps : (duration * i) / Math.max(1, frames - 1);
-  await page.evaluate((t) => window.skyAnimate.seek(t), t);
-  await page.waitForTimeout(300);
-  await page.waitForFunction(() => document.body.dataset.converged === 'true', null, { timeout: 1_800_000, polling: 500 });
-  const dataUrl = await page.evaluate(async ([w, h]) => {
-    const pixels = await window.skyCapture(w, h);
-    const c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), 0, 0);
-    return c.toDataURL('image/png');
-  }, [width, height]);
-  const p = join(dir, `frame-${String(i).padStart(4, '0')}.png`);
-  writeFileSync(p, Buffer.from(dataUrl.split(',')[1], 'base64'));
-  paths.push(p);
+  // Converge at full GPU speed (not paced by the display), then capture.
+  const renderStart = Date.now();
+  await page.evaluate(async (t) => { window.skyAnimate.seek(t); await window.skyConverge(); }, t);
+  renderSeconds += (Date.now() - renderStart) / 1000;
+  if (mp4) {
+    const b64 = await page.evaluate(async ([w, h]) => {
+      const pixels = new Uint8Array(await window.skyCapture(w, h));
+      let s = '';
+      for (let j = 0; j < pixels.length; j += 0x8000) s += String.fromCharCode.apply(null, pixels.subarray(j, j + 0x8000));
+      return btoa(s);
+    }, [width, height]);
+    if (!ffmpeg.stdin.write(Buffer.from(b64, 'base64'))) await new Promise((resolve) => ffmpeg.stdin.once('drain', resolve));
+  } else {
+    const dataUrl = await page.evaluate(async ([w, h]) => {
+      const pixels = await window.skyCapture(w, h);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), 0, 0);
+      return c.toDataURL('image/png');
+    }, [width, height]);
+    const p = join(dir, `frame-${String(i).padStart(4, '0')}.png`);
+    writeFileSync(p, Buffer.from(dataUrl.split(',')[1], 'base64'));
+    paths.push(p);
+  }
   const each = (Date.now() - started) / 1000 / (i + 1);
-  console.log(`frame ${i + 1}/${frames} at ${t.toFixed(2)} s (${each.toFixed(1)} s per frame, ${((frames - i - 1) * each / 60).toFixed(0)} min left)`);
+  console.log(`frame ${i + 1}/${frames} at ${t.toFixed(2)} s (${each.toFixed(2)} s per frame, ${(renderSeconds / (i + 1)).toFixed(2)} s rendering, ${((frames - i - 1) * each / 60).toFixed(0)} min left)`);
 }
 await browser.close();
 if (mp4) {
-  execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(fps), '-i', join(dir, 'frame-%04d.png'),
-    '-c:v', 'libx264', '-preset', 'slow', '-crf', '14', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out]);
+  ffmpeg.stdin.end();
+  await ffmpegDone;
 } else execFileSync('python3', ['-c', `
 import sys
 from PIL import Image
