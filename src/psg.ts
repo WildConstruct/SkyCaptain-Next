@@ -6,6 +6,8 @@
 import { evaluatePsg } from '../vendor/psg-eval.browser.js';
 import type { Settings } from './settings';
 import { MAX_SHAPES, ShapeKind, ShapeLayer, ShapeStore, createShape } from './shapes';
+import type { GroundStore } from './ground';
+import { TERRAIN_TYPES, type TerrainRecipe } from './terrain';
 
 type Value = string | number | boolean;
 
@@ -63,6 +65,9 @@ export class SkyGraph {
     private settings: Settings,
     private store: ShapeStore,
     private setSetting: (key: keyof Settings, value: number) => void,
+    private ground?: GroundStore,
+    /** A ground graph applies only ground.* and never touches the sky or shapes. */
+    private groundOnly = false,
   ) {}
 
   get loaded(): boolean {
@@ -165,6 +170,8 @@ export class SkyGraph {
   }
 
   private apply(vars: Record<string, Value>): void {
+    if (this.ground) applyGroundVars(vars, this.ground, this.last?.seed ?? 1);
+    if (this.groundOnly) return;
     for (const [name, key] of Object.entries(SETTINGS_VARS)) {
       const v = vars[name];
       if (typeof v === 'number' && Number.isFinite(v)) this.setSetting(key, v);
@@ -207,4 +214,45 @@ export class SkyGraph {
       if (!shapes.some((s) => s.psgSlot === slot)) this.lockedSlots.delete(slot);
     }
   }
+}
+
+/** "#rrggbb" (sRGB) to linear albedo, or null. */
+function linearColour(v: Value | undefined): [number, number, number] | null {
+  if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v)) return null;
+  return [1, 3, 5].map((i) => {
+    const c = parseInt(v.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+}
+
+/**
+ * Ground terrain from graph variables (docs/psg-weather.md): ground.water, .geography,
+ * .patch_km, .tile_km, .seed (default: the roll's), .weight.<type> and .colour.<type>
+ * ("#rrggbb"). Any ground.*
+ * variable turns terrain on; a graph without them leaves the ground alone.
+ */
+export function applyGroundVars(vars: Record<string, Value>, ground: GroundStore, rollSeed: number): void {
+  if (!Object.keys(vars).some((k) => k.startsWith('ground.'))) return;
+  const num = (name: string) => {
+    const v = vars[name];
+    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  };
+  const changes: Partial<TerrainRecipe> = {};
+  const set = <K extends keyof TerrainRecipe>(key: K, v: TerrainRecipe[K] | undefined) => { if (v !== undefined) changes[key] = v; };
+  set('waterLevel', num('ground.water'));
+  set('relief', num('ground.geography'));
+  set('patchKm', num('ground.patch_km'));
+  set('tileKm', num('ground.tile_km'));
+  // Without ground.seed the layout follows the roll, so a reroll lays out new ground.
+  changes.seed = Math.round(num('ground.seed') ?? rollSeed);
+  const weights = { ...ground.recipe.weights };
+  const palette = { ...ground.recipe.palette };
+  for (const t of TERRAIN_TYPES) {
+    const w = num(`ground.weight.${t}`);
+    if (w !== undefined) weights[t] = w;
+    const c = linearColour(vars[`ground.colour.${t}`] ?? vars[`ground.color.${t}`]);
+    if (c) palette[t] = c;
+  }
+  ground.enabled = true;
+  ground.update({ ...changes, weights, palette });
 }

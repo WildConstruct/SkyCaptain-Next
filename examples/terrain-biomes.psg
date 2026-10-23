@@ -1,0 +1,304 @@
+{
+ "version": "1.0.0",
+ "name": "skyCaptain terrain biomes",
+ "description": "Example ground graph for skyCaptain: a landscape picks the land-cover mix, water and geography; a season picks the palette. Variables follow skyCaptain docs/psg-weather.md (ground.*).",
+ "metadata": {
+  "author": "skyCaptain",
+  "category": "environment",
+  "type": "SKY_RECIPE",
+  "tags": [
+   "ground",
+   "terrain",
+   "landscape",
+   "skycaptain"
+  ]
+ },
+ "nodes": [
+  {
+   "id": "landscape",
+   "type": "WeightedChoice",
+   "name": "Landscape",
+   "x": 0,
+   "y": 0,
+   "options": [
+    {
+     "id": "landscape-farm",
+     "text": "rolling farmland with hedged fields and scattered woods",
+     "weight": 12,
+     "meta": {
+      "set": {
+       "ground.weight.water": 0.5,
+       "ground.weight.sand": 0.2,
+       "ground.weight.meadow": 2,
+       "ground.weight.fields": 4,
+       "ground.weight.forest": 1.5,
+       "ground.weight.rock": 0.2,
+       "ground.water": {
+        "min": 0.08,
+        "max": 0.2
+       },
+       "ground.geography": {
+        "min": 0.4,
+        "max": 0.7
+       },
+       "ground.patch_km": {
+        "min": 4,
+        "max": 9
+       },
+       "ground.tile_km": {
+        "min": 0.6,
+        "max": 1.0
+       }
+      }
+     }
+    },
+    {
+     "id": "landscape-lakes",
+     "text": "a lake district of forests, meadows and still water",
+     "weight": 8,
+     "meta": {
+      "set": {
+       "ground.weight.water": 1,
+       "ground.weight.sand": 0.3,
+       "ground.weight.meadow": 2,
+       "ground.weight.fields": 1,
+       "ground.weight.forest": 3,
+       "ground.weight.rock": 0.6,
+       "ground.water": {
+        "min": 0.3,
+        "max": 0.42
+       },
+       "ground.geography": {
+        "min": 0.6,
+        "max": 0.9
+       },
+       "ground.patch_km": {
+        "min": 3,
+        "max": 7
+       },
+       "ground.tile_km": {
+        "min": 0.5,
+        "max": 0.9
+       }
+      }
+     }
+    },
+    {
+     "id": "landscape-coast",
+     "text": "a coastline where the land gives way to open sea",
+     "weight": 8,
+     "meta": {
+      "set": {
+       "ground.weight.water": 1,
+       "ground.weight.sand": 0.6,
+       "ground.weight.meadow": 2,
+       "ground.weight.fields": 2,
+       "ground.weight.forest": 1.5,
+       "ground.weight.rock": 0.6,
+       "ground.water": {
+        "min": 0.45,
+        "max": 0.6
+       },
+       "ground.geography": {
+        "min": 0.7,
+        "max": 1.0
+       },
+       "ground.patch_km": {
+        "min": 5,
+        "max": 12
+       },
+       "ground.tile_km": {
+        "min": 0.8,
+        "max": 1.5
+       }
+      }
+     }
+    },
+    {
+     "id": "landscape-taiga",
+     "text": "dark northern forest broken by bogs and rock",
+     "weight": 6,
+     "meta": {
+      "set": {
+       "ground.weight.water": 0.8,
+       "ground.weight.sand": 0.2,
+       "ground.weight.meadow": 1,
+       "ground.weight.fields": 0,
+       "ground.weight.forest": 5,
+       "ground.weight.rock": 1.5,
+       "ground.water": {
+        "min": 0.18,
+        "max": 0.3
+       },
+       "ground.geography": {
+        "min": 0.5,
+        "max": 0.8
+       },
+       "ground.patch_km": {
+        "min": 6,
+        "max": 14
+       },
+       "ground.tile_km": {
+        "min": 0.6,
+        "max": 1.2
+       }
+      }
+     }
+    },
+    {
+     "id": "landscape-arid",
+     "text": "dry scrubland of sand and bare rock with rare green",
+     "weight": 5,
+     "meta": {
+      "set": {
+       "ground.weight.water": 0.1,
+       "ground.weight.sand": 3,
+       "ground.weight.meadow": 0.6,
+       "ground.weight.fields": 0.3,
+       "ground.weight.forest": 0.2,
+       "ground.weight.rock": 2.5,
+       "ground.water": {
+        "min": 0.0,
+        "max": 0.06
+       },
+       "ground.geography": {
+        "min": 0.6,
+        "max": 1.0
+       },
+       "ground.patch_km": {
+        "min": 8,
+        "max": 20
+       },
+       "ground.tile_km": {
+        "min": 1.0,
+        "max": 2.5
+       }
+      }
+     }
+    },
+    {
+     "id": "landscape-wetland",
+     "text": "low wetland of reed meadows, channels and pools",
+     "weight": 5,
+     "meta": {
+      "set": {
+       "ground.weight.water": 2,
+       "ground.weight.sand": 0.2,
+       "ground.weight.meadow": 4,
+       "ground.weight.fields": 0.5,
+       "ground.weight.forest": 1,
+       "ground.weight.rock": 0,
+       "ground.water": {
+        "min": 0.35,
+        "max": 0.5
+       },
+       "ground.geography": {
+        "min": 0.1,
+        "max": 0.35
+       },
+       "ground.patch_km": {
+        "min": 2,
+        "max": 5
+       },
+       "ground.tile_km": {
+        "min": 0.3,
+        "max": 0.6
+       }
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "season",
+   "type": "WeightedChoice",
+   "name": "Season",
+   "x": 0,
+   "y": 240,
+   "options": [
+    {
+     "id": "season-summer",
+     "text": "in high summer",
+     "weight": 10,
+     "meta": {
+      "set": {
+       "ground.colour.water": "#27353c",
+       "ground.colour.sand": "#ada48e",
+       "ground.colour.meadow": "#697c4b",
+       "ground.colour.fields": "#817e5d",
+       "ground.colour.forest": "#3f5538",
+       "ground.colour.rock": "#89847e"
+      }
+     }
+    },
+    {
+     "id": "season-harvest",
+     "text": "at harvest, the fields gone gold",
+     "weight": 6,
+     "meta": {
+      "set": {
+       "ground.colour.water": "#273338",
+       "ground.colour.sand": "#b1a68e",
+       "ground.colour.meadow": "#7c7e50",
+       "ground.colour.fields": "#a69765",
+       "ground.colour.forest": "#455538",
+       "ground.colour.rock": "#8b867e"
+      }
+     }
+    },
+    {
+     "id": "season-autumn",
+     "text": "in autumn colour",
+     "weight": 5,
+     "meta": {
+      "set": {
+       "ground.colour.water": "#273035",
+       "ground.colour.sand": "#aaa08b",
+       "ground.colour.meadow": "#76734b",
+       "ground.colour.fields": "#7c6c50",
+       "ground.colour.forest": "#654b30",
+       "ground.colour.rock": "#86817c"
+      }
+     }
+    },
+    {
+     "id": "season-spring",
+     "text": "in fresh spring green",
+     "weight": 5,
+     "meta": {
+      "set": {
+       "ground.colour.water": "#27353c",
+       "ground.colour.sand": "#ada48e",
+       "ground.colour.meadow": "#618645",
+       "ground.colour.fields": "#6f7c50",
+       "ground.colour.forest": "#45653f",
+       "ground.colour.rock": "#898681"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": "caption",
+   "type": "Output",
+   "name": "Caption",
+   "x": 420,
+   "y": 120,
+   "data": {
+    "label": "Caption"
+   }
+  }
+ ],
+ "edges": [
+  {
+   "id": "e-landscape",
+   "source": "landscape",
+   "target": "caption"
+  },
+  {
+   "id": "e-season",
+   "source": "season",
+   "target": "caption"
+  }
+ ]
+}

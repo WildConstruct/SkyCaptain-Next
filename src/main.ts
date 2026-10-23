@@ -21,6 +21,7 @@ import { Minimap } from './ui/minimap';
 import { ShapesPanel } from './ui/shapes-panel';
 import { GroundPanel } from './ui/ground-panel';
 import { GroundStore } from './ground';
+import terrainGraph from '../examples/terrain-biomes.psg?raw';
 import './style.css';
 
 interface SliderSpec {
@@ -171,7 +172,20 @@ async function main(): Promise<void> {
     renderer.update(settings, invalidationFor(key));
   };
 
-  const skyGraph = new SkyGraph(settings, store, set);
+  // Ground terrain: ?terrain=1 turns it on for tools/, with optional terrainSeed,
+  // terrainWater, terrainRelief, terrainPatch and terrainTile.
+  const ground = new GroundStore();
+  ground.subscribe(() => renderer.setTerrain(ground.enabled ? { map: ground.map, recipe: ground.recipe } : null));
+  if (query.get('terrain') === '1') {
+    const num = (key: string) => (query.get(key) === null ? undefined : Number(query.get(key)));
+    const changes = Object.fromEntries(Object.entries({
+      seed: num('terrainSeed'), waterLevel: num('terrainWater'), relief: num('terrainRelief'),
+      patchKm: num('terrainPatch'), tileKm: num('terrainTile'),
+    }).filter(([, v]) => v !== undefined));
+    ground.enabled = true;
+    ground.update(changes);
+  }
+  const skyGraph = new SkyGraph(settings, store, set, ground);
   Object.assign(window, { skyGraph });
 
   const overlay = new SkyOverlay({ canvas: overlayCanvas, settings, store, tools, stroke, setView: set });
@@ -208,7 +222,7 @@ async function main(): Promise<void> {
   let skyId: string = crypto.randomUUID();
   saveButton.onclick = () => {
     const description = describeSky(settings, store.baseShapes, layers.hasContent, skyVocab);
-    const json = saveSky(settings, store.baseShapes, layers, skyGraph, { name: description.suggestion, moniker: monikerBlock(skyId, description) }, animatePanel.value);
+    const json = saveSky(settings, store.baseShapes, layers, skyGraph, { name: description.suggestion, moniker: monikerBlock(skyId, description) }, animatePanel.value, ground.snapshot());
     download(`${description.suggestion}.wcx`, json, 'application/json');
   };
   openButton.onclick = () => openInput.click();
@@ -271,6 +285,7 @@ async function main(): Promise<void> {
     store.replaceAll(doc.shapes);
     layers.importTiles(tiles);
     skyGraph.restore(doc.graph);
+    ground.restore(doc.ground);
     animatePanel.value = doc.animation;
     history.clear();
   }
@@ -321,19 +336,6 @@ async function main(): Promise<void> {
   panel.append(graphSection);
   new PsgPanel(graphRoot, skyGraph, store);
 
-  // Ground terrain: ?terrain=1 turns it on for tools/, with optional terrainSeed,
-  // terrainWater, terrainRelief, terrainPatch and terrainTile.
-  const ground = new GroundStore();
-  ground.subscribe(() => renderer.setTerrain(ground.enabled ? { map: ground.map, recipe: ground.recipe } : null));
-  if (query.get('terrain') === '1') {
-    const num = (key: string) => (query.get(key) === null ? undefined : Number(query.get(key)));
-    const changes = Object.fromEntries(Object.entries({
-      seed: num('terrainSeed'), waterLevel: num('terrainWater'), relief: num('terrainRelief'),
-      patchKm: num('terrainPatch'), tileKm: num('terrainTile'),
-    }).filter(([, v]) => v !== undefined));
-    ground.enabled = true;
-    ground.update(changes);
-  }
   const groundSection = document.createElement('details');
   groundSection.open = true;
   const groundSummary = document.createElement('summary');
@@ -341,6 +343,16 @@ async function main(): Promise<void> {
   const groundRoot = document.createElement('div');
   groundSection.append(groundSummary, groundRoot);
   new GroundPanel(groundRoot, ground);
+  // A ground graph rolls terrain only (ground.* variables), independently of the sky graph.
+  const groundGraph = new SkyGraph(settings, store, set, ground, true);
+  const groundGraphRoot = document.createElement('div');
+  groundGraphRoot.className = 'subpanel';
+  groundRoot.append(groundGraphRoot);
+  new PsgPanel(groundGraphRoot, groundGraph, store, {
+    example: { name: 'terrain biomes', title: 'Landscapes × seasons', text: terrainGraph },
+    hint: 'A ground graph rolls terrain: landscape, water, geography and palette (ground.* variables).',
+  });
+  Object.assign(window, { skyGroundGraph: groundGraph });
   Object.assign(window, { skyGround: ground });
 
   const toolsSection = document.createElement('details');

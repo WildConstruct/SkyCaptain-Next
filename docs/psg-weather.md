@@ -29,7 +29,26 @@ ignored, so a graph can also carry notes for other tools.
 | `shape.N.type` | optional per-shape cloud type override |
 | `shape.N.seed` | optional detail seed (otherwise derived from the roll seed) |
 
-`N` runs from 0 to 7. The prose `output` becomes the sky's caption, a readable
+`N` runs from 0 to 7.
+
+### Ground
+
+A graph can also roll the terrain (`src/terrain.ts`): a land-cover layout collapsed by
+wave function collapse. Any `ground.*` variable turns terrain on; a graph without them
+leaves the ground alone. A *ground graph* (Ground › Load .psg, or its example) applies only
+these and never touches the sky or shapes, so ground and sky reroll independently.
+
+| Variable | Meaning |
+| --- | --- |
+| `ground.water` | water level, 0–0.9: lakes, then coasts, then sea |
+| `ground.geography` | 0–1: how strongly height sorts the land (0 = patchwork) |
+| `ground.patch_km`, `ground.tile_km` | land-use patch size and layout grain, km |
+| `ground.weight.<type>` | how common a type is: `water`, `sand`, `meadow`, `fields`, `forest`, `rock` |
+| `ground.colour.<type>` | `"#rrggbb"` (sRGB) albedo for a type |
+| `ground.seed` | layout seed; by default the roll's own seed, so a reroll lays out new ground |
+
+`examples/terrain-biomes.psg` picks a landscape (farmland, lake district, coast, taiga,
+arid, wetland) and a season palette. The prose `output` becomes the sky's caption, a readable
 description that can also feed Ethera or an image prompt.
 
 Implemented in `src/psg.ts` (driver) and `src/ui/psg-panel.ts` (load, reroll with R,

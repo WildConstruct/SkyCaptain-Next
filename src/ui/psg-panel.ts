@@ -4,8 +4,18 @@ import exampleGraph from '../../examples/weather-regimes.psg?raw';
 import { SkyGraph } from '../psg';
 import { ShapeStore, labelFor } from '../shapes';
 
+export interface PsgPanelOptions {
+  example: { name: string; title: string; text: string };
+  hint: string;
+}
+
+const SKY_GRAPH: PsgPanelOptions = {
+  example: { name: 'weather regimes', title: 'Weather regimes × time of day', text: exampleGraph },
+  hint: 'A Prompt Spaghetti graph can roll whole skies: shapes, clouds and sun. Reroll keeps anything you hold.',
+};
+
 export class PsgPanel {
-  constructor(private root: HTMLElement, private graph: SkyGraph, private store: ShapeStore) {
+  constructor(private root: HTMLElement, private graph: SkyGraph, private store: ShapeStore, private options: PsgPanelOptions = SKY_GRAPH) {
     graph.subscribe(() => this.render());
     store.subscribe(() => this.render());
     this.render();
@@ -41,8 +51,8 @@ export class PsgPanel {
     load.onclick = () => file.click();
     const example = document.createElement('button');
     example.textContent = 'Example graph';
-    example.title = 'Weather regimes × time of day';
-    example.onclick = () => this.run(async () => { this.error = ''; await g.load('weather regimes', exampleGraph); });
+    example.title = this.options.example.title;
+    example.onclick = () => this.run(async () => { this.error = ''; await g.load(this.options.example.name, this.options.example.text); });
     actions.append(load, example, file);
     this.root.append(actions);
 
@@ -55,7 +65,7 @@ export class PsgPanel {
     if (!g.loaded || !g.last) {
       const hint = document.createElement('p');
       hint.className = 'hint';
-      hint.textContent = 'A Prompt Spaghetti graph can roll whole skies: shapes, clouds and sun. Reroll keeps anything you hold.';
+      hint.textContent = this.options.hint;
       this.root.append(hint);
       return;
     }

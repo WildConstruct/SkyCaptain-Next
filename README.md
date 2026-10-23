@@ -191,6 +191,29 @@ and the far ground is a thin strip at the horizon. The ground therefore shows wh
 camera's own spot is in sun or cloud shadow, as a real HDRI shot there would; in an
 animation it brightens and dims as cloud shadows pass over.
 
+## Terrain
+
+**Ground › Terrain** puts land cover on the ground, for soft generic backgrounds from the
+ground and for aerial views (and it brings water back: lakes and coasts mirror the
+finished sky and clouds, with sun glint on the waves).
+
+- **Layout** (`src/terrain.ts`): wave function collapse over a 128-tile grid that wraps
+  seamlessly, one type per tile: water, sand, meadow, fields, forest, rock. Adjacency rules
+  shore water with sand; an elevation field floods low ground (Water) and sorts the land
+  into height bands (Geography); per-type patch fields grow forests and blocks of fields
+  (Patch size). New layout rolls a new seed; Mix sets how common each type is. A full
+  collapse takes ~50 ms.
+- **Surface** (`src/shaders/ground.wgsl`): the tile grid is warped so edges wander like
+  coastlines and field margins; each type is shaded procedurally (parcels of crops with
+  furrows and darker hedge margins, forest crowns, meadow drifts). The cloud pass lights it
+  (sun, cloud shadows, glint); the composite adds sky light by albedo and the water mirror.
+- **Graphs:** `ground.*` variables (docs/psg-weather.md) roll the recipe and palette. The
+  Ground section has its own graph slot, so terrain rerolls independently of the sky;
+  `examples/terrain-biomes.psg` picks a landscape and a season.
+- Terrain (recipe and painted tiles) saves in the sky `.wcx`.
+
+Not yet: relief (hills, tree lines) for ground-level silhouettes, and painting types.
+
 ## Looks and Moniker names
 
 ![Vibes](docs/look/vibes-001.png)

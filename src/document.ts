@@ -1,6 +1,6 @@
 // A whole sky as one portable .wcx file (kind "sky"): every setting as WCX params, plus
-// the composition in `sky`: shape layers, paint (sparse int16 tiles) and the sky graph
-// with its text and last roll. Rendered images are never stored; they derive from this.
+// the composition in `sky`: shape layers, paint (sparse int16 tiles), the sky graph
+// with its text and last roll, the animation and the ground terrain. Rendered images are never stored; they derive from this.
 // Older .sky.json files (format "skycaptain.sky", version 1) still open.
 
 import type { PaintLayers, PaintTile } from './paint';
@@ -20,6 +20,8 @@ interface Composition {
   graph: SkyGraphState | null;
   /** How the sky moves over time (animation.ts). Older files have none: the default. */
   animation?: Animation;
+  /** Ground terrain (ground.ts snapshot). Older files have none: plain ground. */
+  ground?: unknown;
 }
 
 export interface SkyFile extends WcxFile {
@@ -59,6 +61,7 @@ export function saveSky(
   graph: SkyGraph,
   naming: { name: string; moniker: MonikerBlock },
   animation: Animation = DEFAULT_ANIMATION,
+  ground?: unknown,
 ): string {
   const file: SkyFile = {
     ...header('sky', naming.name, 'Skies', naming.moniker),
@@ -73,6 +76,7 @@ export function saveSky(
       },
       graph: graph.snapshot(),
       animation,
+      ...(ground === undefined ? {} : { ground }),
     },
   };
   return JSON.stringify(file);
