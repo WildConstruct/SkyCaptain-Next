@@ -47,6 +47,8 @@ export class Renderer {
   private shapeTex: GPUTexture;
   private detailTex: GPUTexture;
   private weatherTex: GPUTexture;
+  /** Upper-level weather: storm anvils. */
+  private upperTex: GPUTexture;
   private shapesBuffer: GPUBuffer;
   private layerTex: Record<LayerName, GPUTexture>;
   private shapes: ShapeLayer[] = [];
@@ -126,6 +128,7 @@ export class Renderer {
       size: [noise.detail, noise.detail, noise.detail], dimension: '3d', format: 'rgba8unorm', usage: storageSampled,
     });
     this.weatherTex = device.createTexture({ size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba8unorm', usage: storageSampled });
+    this.upperTex = device.createTexture({ size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba8unorm', usage: storageSampled });
     this.shapesBuffer = device.createBuffer({ size: SHAPES_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     const layer = () => device.createTexture({
       size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
@@ -275,6 +278,7 @@ export class Renderer {
         { binding: 3, resource: this.shapeTex.createView() },
         { binding: 4, resource: this.detailTex.createView() },
         { binding: 5, resource: this.weatherTex.createView() },
+        { binding: 13, resource: this.upperTex.createView() },
         { binding: 6, resource: this.transmittanceLut.createView() },
         { binding: 7, resource: this.skyCube.createView({ dimension: 'cube' }) },
         { binding: 8, resource: { buffer: accum } },
@@ -435,6 +439,7 @@ export class Renderer {
         { binding: 3, resource: this.shapeTex.createView() },
         { binding: 4, resource: this.detailTex.createView() },
         { binding: 5, resource: this.weatherTex.createView() },
+        { binding: 13, resource: this.upperTex.createView() },
         { binding: 11, resource: this.shadowTex.createView() },
       ],
     }));
@@ -454,6 +459,7 @@ export class Renderer {
         { binding: 3, resource: this.layerTex.paint.createView() },
         { binding: 4, resource: this.layerTex.warp.createView() },
         { binding: 5, resource: this.clampSampler },
+        { binding: 6, resource: this.upperTex.createView() },
       ],
     }));
     pass.dispatchWorkgroups(WEATHER_SIZE / 8, WEATHER_SIZE / 8);
@@ -592,8 +598,8 @@ export class Renderer {
   }
 
   // Debug: reads one texel as floats. Used by tools/ to inspect scene-linear values.
-  async readTexel(name: 'sky' | 'cloud' | 'transmittance' | 'ms' | 'weather' | 'shape', x: number, y: number, layer = 0): Promise<number[]> {
-    const tex = { sky: this.skyCube, cloud: this.cloudCube, transmittance: this.transmittanceLut, ms: this.msLut, weather: this.weatherTex, shape: this.shapeTex }[name];
+  async readTexel(name: 'sky' | 'cloud' | 'transmittance' | 'ms' | 'weather' | 'upper' | 'shape', x: number, y: number, layer = 0): Promise<number[]> {
+    const tex = { sky: this.skyCube, cloud: this.cloudCube, transmittance: this.transmittanceLut, ms: this.msLut, weather: this.weatherTex, upper: this.upperTex, shape: this.shapeTex }[name];
     const half = tex.format === 'rgba16float';
     const buffer = this.device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const encoder = this.device.createCommandEncoder();

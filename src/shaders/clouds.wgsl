@@ -17,6 +17,8 @@
 // Cloud shadow map over the ground around the eye: ground_shadow writes it, the ground reads it.
 @group(0) @binding(11) var shadow_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(12) var shadow_tex: texture_2d<f32>;
+// Upper-level weather (weather.wgsl): r = anvil amount, g = anvil thickness.
+@group(0) @binding(13) var upper_tex: texture_2d<f32>;
 
 const BAYER_OFFSETS = array<vec2u, 16>(
   vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
@@ -94,13 +96,45 @@ struct Weather {
 }
 
 fn sample_weather(p: vec3f, altitude: f32) -> Weather {
+  let uv = (p.xz + params.wind.xy) / params.scale.z + 0.5;
+  return with_anvil(sample_layer_weather(uv, altitude), uv, altitude);
+}
+
+// skyCaptain: storm anvils, which Takram's 2.5D layers cannot make (a cloud's footprint
+// is the same at every height). A plate hangs under the top of the shell where storms
+// author one: flat-topped (the tropopause caps it), softer underneath, thick over the
+// tower and thinning downwind. In height fractions of the tower layer: the top sits at
+// ANVIL_TOP, just above where the tapered tower gives out, and the plate is ANVIL_DEPTH
+// deep at the core. Its height fraction for erosion and the density profile is the
+// upper part of a cloud, so it reads as dense and smooth-topped.
+const ANVIL_TOP: f32 = 0.84;
+const ANVIL_DEPTH: f32 = 0.26;
+fn with_anvil(layer: Weather, uv: vec2f, altitude: f32) -> Weather {
+  let upper = textureSampleLevel(upper_tex, clamp_sampler, uv, 0.0);
+  if (upper.r <= 0.0) { return layer; }
+  let tower = cloud_top() - cloud_bottom();
+  let top = cloud_bottom() + ANVIL_TOP * tower;
+  // 0 at the flat top, 1 at the base of the plate.
+  let a = (top - altitude) / max(ANVIL_DEPTH * tower * upper.g, 1e-3);
+  if (a <= 0.0 || a >= 1.0) { return layer; }
+  let vertical = smoothstep(0.0, 0.06, a) * (1.0 - smoothstep(0.45, 1.0, a));
+  let density = upper.r * vertical;
+  if (density <= layer.density) { return layer; }
+  var w: Weather;
+  w.density = density;
+  w.hf = mix(0.95, 0.6, a);
+  w.scale = 1.0;
+  return w;
+}
+
+fn sample_layer_weather(uv: vec2f, altitude: f32) -> Weather {
   var w: Weather;
   w.density = 0.0;
   w.hf = 0.0;
   w.scale = 0.0;
   if (altitude <= cloud_bottom() || altitude >= cloud_top()) { return w; }
   // skyCaptain: the local weather is our authored map (background, shapes, paint).
-  let tex = textureSampleLevel(weather_tex, clamp_sampler, (p.xz + params.wind.xy) / params.scale.z + 0.5, 0.0);
+  let tex = textureSampleLevel(weather_tex, clamp_sampler, uv, 0.0);
   let kind = clamp(tex.g + params.cloud.y, 0.0, 1.0);
   w.hf = (altitude - cloud_bottom()) / cloud_height(kind);
   if (w.hf >= 1.0) { return w; }
