@@ -52,3 +52,33 @@ test('untrusted recipes fall back and clamp', () => {
   assert.deepEqual(r.palette.sand, DEFAULT_TERRAIN.palette.sand, 'a bad colour is ignored');
   assert.deepEqual(r.palette.water, [0.1, 0.2, 1], 'a good colour is clamped');
 });
+
+test('relief rises from the shore to the recipe height; water stays at sea level', async () => {
+  const { heightField } = await import('../src/terrain.ts');
+  const flat = heightField(generateTerrain(DEFAULT_TERRAIN), DEFAULT_TERRAIN);
+  assert.ok(flat.heights.every((h) => h === 0) && flat.atOrigin === 0, 'heightKm 0 is flat');
+  const recipe = { ...DEFAULT_TERRAIN, heightKm: 3 };
+  const map = generateTerrain(recipe);
+  const relief = heightField(map, recipe);
+  const max = relief.heights.reduce((m, h) => Math.max(m, h), 0);
+  assert.ok(max > 1.5 && max <= 3.3, `peaks near the recipe height (${max.toFixed(2)} km)`);
+  // Deep inside a large water body (every neighbour water too) the blur cannot lift it.
+  const s = relief.size, scale = map.size / s;
+  let wet = 0;
+  for (let y = 0; y < s; y += 7) for (let x = 0; x < s; x += 7) {
+    const tx = Math.floor(x * scale), ty = Math.floor(y * scale);
+    let allWater = true;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) allWater &&= map.types[((ty + dy + map.size) % map.size) * map.size + ((tx + dx + map.size) % map.size)] === 0;
+    if (allWater) { wet++; assert.equal(relief.heights[y * s + x], 0); }
+  }
+  assert.ok(wet > 0, 'the sample found open water');
+  const sharp = heightField(map, { ...recipe, ridges: 1 }), round = heightField(map, { ...recipe, ridges: 0 });
+  // Sharpness as curvature (|Laplacian|): both rise to the same peak, so slope totals barely differ.
+  const curvature = (f) => {
+    const n = f.size, h = f.heights;
+    let c = 0;
+    for (let y = 1; y < n - 1; y++) for (let x = 1; x < n - 1; x++) { const i = y * n + x; c += Math.abs(4 * h[i] - h[i - 1] - h[i + 1] - h[i - n] - h[i + n]); }
+    return c;
+  };
+  assert.ok(curvature(sharp) > curvature(round) * 1.15, 'ridges make sharper relief');
+});

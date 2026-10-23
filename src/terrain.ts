@@ -43,6 +43,12 @@ export interface TerrainRecipe {
   cohesion: number;
   /** Linear albedo per type. */
   palette: Record<TerrainType, [number, number, number]>;
+  /** Height of the highest ground, km: 0 is flat, a few tenths rolling hills, several km mountains. */
+  heightKm: number;
+  /** 0 = rounded hills, 1 = sharp ridged ranges. */
+  ridges: number;
+  /** Altitude above which snow lies on gentle slopes, km. */
+  snowKm: number;
 }
 
 export const DEFAULT_TERRAIN: TerrainRecipe = {
@@ -61,6 +67,9 @@ export const DEFAULT_TERRAIN: TerrainRecipe = {
     forest: [0.05, 0.09, 0.04],
     rock: [0.25, 0.23, 0.21],
   },
+  heightKm: 0,
+  ridges: 0.6,
+  snowKm: 2.8,
 };
 
 /** Grid side, tiles. At the default 1 km tile the ground repeats every 128 km. */
@@ -96,20 +105,9 @@ export function smoothField(size: number, seed: number, baseCells = 4, octaves =
   const random = mulberry32(seed * 7919 + 13);
   const out = new Float32Array(size * size);
   for (let octave = 0, cells = baseCells, amp = 1; octave < octaves; octave++, cells *= 2, amp *= 0.5) {
-    const lattice = Array.from({ length: cells * cells }, () => random());
-    const at = (x: number, y: number) => lattice[((y + cells) % cells) * cells + ((x + cells) % cells)];
+    const noise = gradientLattice(cells, random);
     for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const fx = (x / size) * cells;
-        const fy = (y / size) * cells;
-        const ix = Math.floor(fx);
-        const iy = Math.floor(fy);
-        const sx = smooth(fx - ix);
-        const sy = smooth(fy - iy);
-        const top = at(ix, iy) + (at(ix + 1, iy) - at(ix, iy)) * sx;
-        const bottom = at(ix, iy + 1) + (at(ix + 1, iy + 1) - at(ix, iy + 1)) * sx;
-        out[y * size + x] += (top + (bottom - top) * sy) * amp;
-      }
+      for (let x = 0; x < size; x++) out[y * size + x] += noise((x / size) * cells, (y / size) * cells) * amp;
     }
   }
   // Stretch to the full 0..1 range so the water level means the same for every seed.
@@ -117,6 +115,63 @@ export function smoothField(size: number, seed: number, baseCells = 4, octaves =
   let hi = -Infinity;
   for (const v of out) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
   for (let i = 0; i < out.length; i++) out[i] = (out[i] - lo) / Math.max(hi - lo, 1e-6);
+  return out;
+}
+
+/**
+ * Periodic gradient (Perlin) noise over a cells x cells lattice, about -0.7..0.7. Gradient
+ * noise has no grid-aligned blobs, which value noise shows as square hills.
+ */
+function gradientLattice(cells: number, random: () => number): (x: number, y: number) => number {
+  const angles = Array.from({ length: cells * cells }, () => random() * Math.PI * 2);
+  const gx = angles.map(Math.cos);
+  const gy = angles.map(Math.sin);
+  const dot = (ix: number, iy: number, dx: number, dy: number) => {
+    const k = (((iy % cells) + cells) % cells) * cells + (((ix % cells) + cells) % cells);
+    return gx[k] * dx + gy[k] * dy;
+  };
+  return (x, y) => {
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const sx = fade(fx);
+    const sy = fade(fy);
+    const top = dot(ix, iy, fx, fy) + (dot(ix + 1, iy, fx - 1, fy) - dot(ix, iy, fx, fy)) * sx;
+    const bottom = dot(ix, iy + 1, fx, fy - 1) + (dot(ix + 1, iy + 1, fx - 1, fy - 1) - dot(ix, iy + 1, fx, fy - 1)) * sx;
+    return top + (bottom - top) * sy;
+  };
+}
+
+function fade(t: number): number {
+  return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+/**
+ * Ridged multifractal (Musgrave) on the torus, 0..1: sharp crests whose detail is strongest
+ * where the coarser octaves are already high, so main ridges carry branching spurs.
+ */
+export function ridgedField(size: number, seed: number, baseCells = 6, octaves = 5): Float32Array {
+  const random = mulberry32(seed * 6151 + 29);
+  const lattices = Array.from({ length: octaves }, (_, o) => gradientLattice(baseCells << o, random));
+  const out = new Float32Array(size * size);
+  let hi = 0;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let sum = 0;
+      let weight = 1;
+      for (let o = 0, amp = 1; o < octaves; o++, amp *= 0.5) {
+        const cells = baseCells << o;
+        let signal = 1 - Math.abs(lattices[o]((x / size) * cells, (y / size) * cells)) * 1.6;
+        signal = Math.max(0, signal) ** 2 * weight;
+        weight = Math.min(1, signal * 2);
+        sum += signal * amp;
+      }
+      out[y * size + x] = sum;
+      hi = Math.max(hi, sum);
+    }
+  }
+  for (let i = 0; i < out.length; i++) out[i] /= hi || 1;
   return out;
 }
 
@@ -388,5 +443,63 @@ export function parseTerrain(raw: unknown): TerrainRecipe {
     patchKm: num(r.patchKm, d.patchKm, 0.5, 100),
     cohesion: num(r.cohesion, d.cohesion, 0, 10),
     palette,
+    heightKm: num(r.heightKm, d.heightKm, 0, 8),
+    ridges: num(r.ridges, d.ridges, 0, 1),
+    snowKm: num(r.snowKm, d.snowKm, 0, 9),
   };
+}
+
+/** Height field side, texels: over the 128-tile period, about 250 m per texel at 1 km tiles. */
+export const HEIGHT_GRID = 512;
+
+export interface HeightField {
+  size: number;
+  /** Ground height above sea level per texel, km, row-major over the same period as the layout. */
+  heights: Float32Array;
+  /** Height under the eye (the origin), as the renderer's linear filter reads it there. */
+  atOrigin: number;
+}
+
+/**
+ * Relief from the same elevation the layout was collapsed on, so land types sit where they
+ * belong (water at sea level, rock high): land rises from the shore, shaped into rounded
+ * hills or ridged ranges, up to heightKm. Water tiles are held flat at sea level.
+ */
+export function heightField(map: TerrainMap, recipe: TerrainRecipe, size = HEIGHT_GRID): HeightField {
+  const heights = new Float32Array(size * size);
+  if (recipe.heightKm <= 0) return { size, heights, atOrigin: 0 };
+  // The elevation function is continuous, so sampling it finer gives the same landscape.
+  const elevation = smoothField(size, recipe.seed);
+  const ridged = ridgedField(size, recipe.seed * 13 + 101);
+  const wl = recipe.waterLevel;
+  const scale = map.size / size;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const tile = map.types[Math.floor(y * scale) * map.size + Math.floor(x * scale)];
+      if (tile === 0) continue; // water
+      const land = Math.max(0, (elevation[i] - wl) / Math.max(1 - wl, 1e-3));
+      const rise = land ** 1.6;
+      // Ridges carve the rise into crests and valleys; the mean height stays about the same.
+      const shape = 1 - recipe.ridges + recipe.ridges * (0.3 + 1.4 * ridged[i]);
+      // At least a couple of metres above the water so shores do not flood.
+      heights[i] = Math.max(0.002, recipe.heightKm * rise * shape);
+    }
+  }
+  // The highest ground is exactly heightKm, whatever the ridging did to the shape.
+  const top = heights.reduce((m, h) => Math.max(m, h), 0);
+  if (top > 0) for (let i = 0; i < heights.length; i++) if (heights[i] > 0) heights[i] = Math.max(0.002, (heights[i] / top) * recipe.heightKm);
+  // One box blur pass softens tile steps (water edges, type boundaries).
+  const soft = new Float32Array(heights.length);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let sum = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += heights[((y + dy + size) % size) * size + ((x + dx + size) % size)];
+      soft[y * size + x] = sum / 9;
+    }
+  }
+  // The renderer samples texel centres with a linear filter, wrapping: at the origin it
+  // reads the four corner texels equally.
+  const atOrigin = (soft[0] + soft[size - 1] + soft[(size - 1) * size] + soft[size * size - 1]) / 4;
+  return { size, heights: soft, atOrigin };
 }
