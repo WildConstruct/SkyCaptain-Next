@@ -88,6 +88,10 @@ const MIP_PER_KM: f32 = 0.01;
 // Averages of the baked detail noise's two erosion terms (measured: E[d^6], E[1 - d]).
 const DETAIL_MEAN_POW6: f32 = 0.150;
 const DETAIL_MEAN_INVERSE: f32 = 0.303;
+// Detail features (one detail scale) fade out between these sizes on screen, in texels.
+const DETAIL_MIN_TEXELS: f32 = 4.0;
+const DETAIL_FULL_TEXELS: f32 = 16.0;
+const GOLDEN_RATIO_FRACT: f32 = 0.618033989;
 const RECIPROCAL_PI4: f32 = 0.0795774715459;
 
 fn remap_clamped(x: f32, a: f32, b: f32) -> f32 {
@@ -212,10 +216,12 @@ fn media_at(p: vec3f, detail_amount: f32) -> f32 {
   return sample_media(w, p, altitude, detail_amount).extinction;
 }
 
-// How much detail the view sees at a distance: full near the eye, fading out far away,
-// smoothly (it used to switch on and off per ray, which speckled distant clouds).
-fn view_detail(mip: f32) -> f32 {
-  return 1.0 - smoothstep(0.35, 1.1, mip);
+// How much detail the view sees at distance t (km): full while a detail feature spans many
+// cube texels, gone by the time it shrinks to a few. Detail smaller than that only reads
+// as fine-grained globules (it used to switch on and off per ray, which also speckled).
+fn view_detail(t: f32) -> f32 {
+  let texels = params.scale.y / max(t * texel_angle(), 1e-6);
+  return smoothstep(DETAIL_MIN_TEXELS, DETAIL_FULL_TEXELS, texels);
 }
 
 // marchOpticalDepth: a few short, doubling steps.
@@ -625,7 +631,10 @@ fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchRes
   let ground_radiance = params.misc.y / PI * (ground_sky_irradiance + (1.0 - coverage) * ground_sun_irradiance);
 
   let max_iterations = i32(params.march.x);
-  let jitter = hash33(seed).x;
+  // skyCaptain: stratified across a texel's passes (a golden-ratio sequence from a random
+  // start per texel) rather than independent per pass. With large far steps, a handful of
+  // random offsets clumped into blotches that read as small globules.
+  let jitter = fract(hash33(vec3u(seed.xy, 0u)).x + f32(seed.z / 16u) * GOLDEN_RATIO_FRACT);
   var step_size = MIN_STEP_KM + (PERSPECTIVE_STEP_SCALE - 1.0) * t_near;
   var d = step_size * jitter * 2.0;
   let max_d = t_far - t_near;
@@ -647,7 +656,7 @@ fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchRes
       d += mix(step_size, MAX_STEP_KM, min(1.0, mip));
       continue;
     }
-    let media = sample_media(w, p, altitude, view_detail(mip));
+    let media = sample_media(w, p, altitude, view_detail(t));
     if (media.extinction > MIN_EXTINCTION) {
       let sun_irradiance = illum * sun_transmittance(p);
       let surface_normal = normalize(p);
