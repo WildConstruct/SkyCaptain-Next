@@ -58,6 +58,10 @@ const MIN_STEP_KM: f32 = 0.05;
 const MAX_STEP_KM: f32 = 1.0;
 const MAX_RAY_KM: f32 = 200.0;
 const PERSPECTIVE_STEP_SCALE: f32 = 1.01;
+// skyCaptain: bisections back to a cloud's surface after a long empty step.
+const ENTRY_BISECTIONS: i32 = 5;
+// skyCaptain: first step into a cloud from empty space (then doubled up to the normal step).
+const ENTRY_STEP_KM: f32 = 0.01;
 const MIN_DENSITY: f32 = 1e-5;
 const MIN_EXTINCTION: f32 = 1e-2; // 1e-5 per metre
 const MIN_TRANSMITTANCE: f32 = 1e-2;
@@ -153,7 +157,12 @@ fn sample_layer_weather(uv: vec2f, altitude: f32) -> Weather {
   // follows the global coverage exactly, as upstream. Clear zeroes the density (blue).
   if (tex.b <= 0.0) { return w; }
   let coverage = max(params.cloud.x, AUTHORED_COVERAGE * local_weather * tex.a);
-  let factor = 1.0 - coverage * shape_altering(w.hf);
+  // skyCaptain: towering cores (cumulonimbus) keep their width up the column and only
+  // round off near the top, where the anvil takes over; Takram's semicircle would cap
+  // them into a squat dome.
+  let column = smoothstep(0.0, 0.06, w.hf) * (1.0 - smoothstep(0.78, 1.0, w.hf));
+  let altering = mix(shape_altering(w.hf), column, smoothstep(0.8, 0.95, kind) * tex.a);
+  let factor = 1.0 - coverage * altering;
   w.density = remap_clamped(mix(local_weather, 1.0, COVERAGE_FILTER_WIDTH), factor, factor + COVERAGE_FILTER_WIDTH);
   w.scale = tex.b;
   return w;
@@ -403,6 +412,8 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   var transmittance_integral = 1.0;
   var weighted_distance_sum = 0.0;
   var transmittance_sum = 0.0;
+  var empty_step = 0.0;
+  var surface_step = 0.0;
 
   for (var i = 0; i < max_iterations; i++) {
     if (d > max_d) { break; }
@@ -414,9 +425,34 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
     if (w.density <= MIN_DENSITY) {
       // Step longer in empty space.
       step_size *= PERSPECTIVE_STEP_SCALE;
-      d += mix(step_size, MAX_STEP_KM, min(1.0, mip));
+      empty_step = mix(step_size, MAX_STEP_KM, min(1.0, mip));
+      d += empty_step;
       continue;
     }
+    // skyCaptain: a long empty step can land deep inside a cloud. Clouds are opaque within
+    // metres, so their look comes from the first samples: landing deep leaves only dim,
+    // blue sky light and distant clouds go flat and grey. Bisect back to where the cloud
+    // begins, so far clouds are entered at their surface like near ones.
+    if (empty_step > step_size) {
+      var lo = d - empty_step;
+      var hi = d;
+      for (var k = 0; k < ENTRY_BISECTIONS; k++) {
+        let mid = 0.5 * (lo + hi);
+        let pm = origin + dir * (t_near + mid);
+        if (sample_weather(pm, length(pm) - ground_radius()).density > MIN_DENSITY) { hi = mid; } else { lo = mid; }
+      }
+      d = hi;
+      empty_step = 0.0;
+      surface_step = ENTRY_STEP_KM;
+      continue;
+    }
+    // skyCaptain: coming out of empty space, start with short steps and double them back
+    // up to the normal step. A 50-300 m step through 200/km cloud is opaque many times
+    // over, and the integration takes the light at its first sample for the whole step;
+    // short steps put the first samples at the surface, where sunlit faces are lit.
+    if (empty_step > 0.0) { surface_step = ENTRY_STEP_KM; }
+    empty_step = 0.0;
+    let step = select(step_size, surface_step, surface_step > 0.0);
     let media = sample_media(w, p, altitude, mip, jitter);
     if (media.extinction > MIN_EXTINCTION) {
       let sun_irradiance = illum * sun_transmittance(p);
@@ -434,7 +470,7 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
       radiance *= 1.0 - params.ms.w * exp(-media.extinction * POWDER_EXPONENT_KM);
 
       // Energy-conserving analytical integration (Frostbite 2016, 5.6.3).
-      let transmittance = exp(-media.extinction * step_size);
+      let transmittance = exp(-media.extinction * step);
       let clamped = max(media.extinction, 1e-4);
       radiance_integral += transmittance_integral * (radiance - radiance * transmittance) / clamped;
       transmittance_integral *= transmittance;
@@ -442,6 +478,12 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
       transmittance_sum += transmittance_integral;
     }
     if (transmittance_integral <= MIN_TRANSMITTANCE) { break; }
+    if (surface_step > 0.0) {
+      d += surface_step;
+      surface_step *= 2.0;
+      if (surface_step >= step_size) { surface_step = 0.0; }
+      continue;
+    }
     // Take a shorter step because we've already hit the clouds.
     step_size *= PERSPECTIVE_STEP_SCALE;
     d += step_size;

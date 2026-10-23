@@ -226,9 +226,10 @@ fn anvil(shape: Shape, xz: vec2f) -> vec4f {
   if (along > ANVIL_LENGTH) { d_along = (along - ANVIL_LENGTH) / 0.6; }
   // Fibrous edges: streaks run along the anvil, so stretch the noise downwind.
   let streaks = shape_noise(vec2f(along * 0.35, across * 1.6) * core, 3.0, shape.seed + 11.0);
-  // Broad lobes on the outline, then streaks along it.
+  // Broad lobes on the outline, streaks along it, and ragged mid-scale bites.
   let lobes = shape_noise(xz, core * 1.5, shape.seed + 5.0);
-  let d = length(vec2f(d_along, abs(across) / half_width)) + (lobes - 0.5) * 0.7 + (streaks - 0.5) * 0.5;
+  let ragged = shape_noise(xz, core * 0.4, shape.seed + 23.0);
+  let d = length(vec2f(d_along, abs(across) / half_width)) + (lobes - 0.5) * 0.6 + (streaks - 0.5) * 0.4 + (ragged - 0.5) * 0.45;
   let mature = smoothstep(0.35, 0.85, shape.strength);
   let amount = mature * (1.0 - smoothstep(0.55, 1.0, d)) * (1.0 - 0.4 * smoothstep(0.5, 1.0, t));
   // A thin plate everywhere, bulging deep over the core where the tower feeds it.
