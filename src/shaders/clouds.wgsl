@@ -17,6 +17,9 @@
 // Cloud shadow map over the ground around the eye: ground_shadow writes it, the ground reads it.
 @group(0) @binding(11) var shadow_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(12) var shadow_tex: texture_2d<f32>;
+// Ground terrain (ground.wgsl).
+@group(0) @binding(14) var terrain_tex: texture_2d<f32>;
+@group(0) @binding(15) var<uniform> ground: Ground;
 
 const BAYER_OFFSETS = array<vec2u, 16>(
   vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
@@ -309,8 +312,10 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
   let sun = params.sun_dir.xyz;
   let illum = params.sun_color.rgb * params.sun_dir.w;
 
+  let surface = ground_surface(g.xz);
   let cos_sun = dot(n, sun);
   var direct = vec3f(0.0);
+  var glint = vec3f(0.0);
   if (cos_sun > 0.0) {
     var shadow = textureSampleLevel(shadow_tex, clamp_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0).r;
     // skyCaptain: from altitude the ground reaches far past the shadow map; march the
@@ -318,7 +323,17 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
     if (any(abs(g.xz) > vec2f(GROUND_SHADOW_KM * 0.5))) {
       shadow = exp(-layer_optical_depth(g, sun, DISTANT_SHADOW_STEPS, jitter.x));
     }
-    direct = illum * transmittance_lut_at(length(g), cos_sun) * cos_sun * shadow;
+    let sun_at_ground = illum * transmittance_lut_at(length(g), cos_sun) * shadow;
+    direct = sun_at_ground * cos_sun;
+    if (surface.water > 0.0) {
+      // Sun glint on the waves (normalized Blinn-Phong); sky and cloud reflections are
+      // added at composite time from the finished cubes.
+      let nw = water_normal(g.xz, n);
+      let h = normalize(sun - dir);
+      let shine = 400.0;
+      glint = sun_at_ground * water_fresnel(dot(h, -dir)) * (shine + 8.0) / (8.0 * PI)
+        * pow(max(dot(nw, h), 0.0), shine) * surface.water;
+    }
   }
   // skyCaptain: the ground's sky light is normally integrated from the finished cube at
   // composite time (display.wgsl ground_ambient), which is right for ground near an eye
@@ -338,7 +353,7 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
     textureSampleLevel(transmittance_lut, clamp_sampler, uvs.xy, 0.0).rgb
       / max(textureSampleLevel(transmittance_lut, clamp_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
     vec3f(0.0), vec3f(1.0));
-  return air * params.misc.y / PI * direct;
+  return air * (surface.albedo / PI * direct + glint);
 }
 
 struct MarchResult {

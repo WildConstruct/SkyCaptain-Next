@@ -19,6 +19,8 @@ import { ShapeKind, ShapeLayer, ShapeStore, createShape } from './shapes';
 import { SkyOverlay } from './ui/sky-overlay';
 import { Minimap } from './ui/minimap';
 import { ShapesPanel } from './ui/shapes-panel';
+import { GroundPanel } from './ui/ground-panel';
+import { GroundStore } from './ground';
 import './style.css';
 
 interface SliderSpec {
@@ -319,6 +321,28 @@ async function main(): Promise<void> {
   panel.append(graphSection);
   new PsgPanel(graphRoot, skyGraph, store);
 
+  // Ground terrain: ?terrain=1 turns it on for tools/, with optional terrainSeed,
+  // terrainWater, terrainRelief, terrainPatch and terrainTile.
+  const ground = new GroundStore();
+  ground.subscribe(() => renderer.setTerrain(ground.enabled ? { map: ground.map, recipe: ground.recipe } : null));
+  if (query.get('terrain') === '1') {
+    const num = (key: string) => (query.get(key) === null ? undefined : Number(query.get(key)));
+    const changes = Object.fromEntries(Object.entries({
+      seed: num('terrainSeed'), waterLevel: num('terrainWater'), relief: num('terrainRelief'),
+      patchKm: num('terrainPatch'), tileKm: num('terrainTile'),
+    }).filter(([, v]) => v !== undefined));
+    ground.enabled = true;
+    ground.update(changes);
+  }
+  const groundSection = document.createElement('details');
+  groundSection.open = true;
+  const groundSummary = document.createElement('summary');
+  groundSummary.textContent = 'Ground';
+  const groundRoot = document.createElement('div');
+  groundSection.append(groundSummary, groundRoot);
+  new GroundPanel(groundRoot, ground);
+  Object.assign(window, { skyGround: ground });
+
   const toolsSection = document.createElement('details');
   toolsSection.open = true;
   const toolsSummary = document.createElement('summary');
@@ -339,6 +363,8 @@ async function main(): Promise<void> {
     const [x, z] = overlay.centerMapPoint();
     store.add(createShape(kind, x, z, Math.floor(Math.random() * 10000)));
   });
+
+  panel.append(groundSection);
 
   for (const group of GROUPS) {
     const details = document.createElement('details');

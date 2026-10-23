@@ -1,4 +1,5 @@
 import commonWgsl from './shaders/common.wgsl?raw';
+import groundWgsl from './shaders/ground.wgsl?raw';
 import noiseWgsl from './shaders/noise.wgsl?raw';
 import noiseBakeWgsl from './shaders/noise-bake.wgsl?raw';
 import weatherWgsl from './shaders/weather.wgsl?raw';
@@ -10,11 +11,16 @@ import exportWgsl from './shaders/export.wgsl?raw';
 import { Invalidation, QUALITY, Quality, Settings, packParams } from './settings';
 import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
 import type { LayerName } from './paint';
+import { TERRAIN_TYPES, type TerrainMap, type TerrainRecipe } from './terrain';
 
 const SKY_FACE = 256;
 /** 11 vec4f: must match Params in common.wgsl. */
 const PARAMS_BYTES = 176;
 export const WEATHER_SIZE = 1024;
+/** Largest terrain grid the ground texture holds. */
+const TERRAIN_TEXTURE_MAX = 256;
+/** Ground uniform (ground.wgsl Ground): 6 palette vec4s and an info vec4. */
+const GROUND_BYTES = 7 * 16;
 /** GPU time per display frame spent on cloud passes, ms (the rest is left for the page). */
 const FRAME_BUDGET_MS = 10;
 const MAX_PASSES_PER_FRAME = 32;
@@ -55,6 +61,9 @@ export class Renderer {
   private detailTex: GPUTexture;
   private weatherTex: GPUTexture;
   private shapesBuffer: GPUBuffer;
+  /** Ground terrain: one texel per tile (type, tile random, elevation) and its uniforms. */
+  private terrainTex: GPUTexture;
+  private groundBuffer: GPUBuffer;
   private layerTex: Record<LayerName, GPUTexture>;
   private shapes: ShapeLayer[] = [];
   private transmittanceLut: GPUTexture;
@@ -136,6 +145,9 @@ export class Renderer {
     });
     this.weatherTex = device.createTexture({ size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba8unorm', usage: storageSampled });
     this.shapesBuffer = device.createBuffer({ size: SHAPES_BUFFER_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    this.terrainTex = device.createTexture({ size: [TERRAIN_TEXTURE_MAX, TERRAIN_TEXTURE_MAX], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    this.groundBuffer = device.createBuffer({ size: GROUND_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.setTerrain(null);
     const layer = () => device.createTexture({
       size: [WEATHER_SIZE, WEATHER_SIZE], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
@@ -148,8 +160,8 @@ export class Renderer {
     const noiseModule = module(noiseWgsl + '\n' + noiseBakeWgsl, 'noise bake');
     const weatherModule = module(noiseWgsl + '\n' + weatherWgsl, 'weather');
     const atmosphereModule = module(atmosphereWgsl, 'atmosphere');
-    const cloudModule = module(cloudsWgsl, 'clouds');
-    const displayModule = module(displayWgsl, 'display');
+    const cloudModule = module(groundWgsl + '\n' + cloudsWgsl, 'clouds');
+    const displayModule = module(groundWgsl + '\n' + displayWgsl, 'display');
 
     const compute = (m: GPUShaderModule, entryPoint: string) =>
       device.createComputePipeline({ layout: 'auto', compute: { module: m, entryPoint } });
@@ -160,7 +172,7 @@ export class Renderer {
     this.skyPipeline = compute(atmosphereModule, 'sky_cube');
     this.cloudPipeline = compute(cloudModule, 'render');
     this.referencePipeline = compute(cloudModule, 'render_reference');
-    this.exportPipeline = compute(module(exportWgsl, 'export'), 'composite');
+    this.exportPipeline = compute(module(groundWgsl + '\n' + exportWgsl, 'export'), 'composite');
     this.downwellingPipeline = compute(module(downwellingWgsl, 'downwelling'), 'integrate');
     this.shadowPipeline = compute(cloudModule, 'ground_shadow');
     this.shadowTex = device.createTexture({ size: [512, 512], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
@@ -199,6 +211,30 @@ export class Renderer {
       [w, h],
     );
     this.pending.add('weather');
+  }
+
+  /**
+   * Shows a terrain layout on the ground, or plain ground (the albedo slider) for null.
+   * Changing the ground re-renders the cube: the cloud pass shades the ground's sun light.
+   */
+  setTerrain(terrain: { map: TerrainMap; recipe: TerrainRecipe } | null): void {
+    const data = new Float32Array(GROUND_BYTES / 4);
+    if (terrain) {
+      const { map, recipe } = terrain;
+      const texels = new Uint8Array(map.size * map.size * 4);
+      for (let i = 0; i < map.types.length; i++) {
+        texels[i * 4] = map.types[i];
+        // A stable random per tile (field parcels, furrow directions).
+        texels[i * 4 + 1] = (Math.imul(i ^ (recipe.seed * 2654435761), 2246822519) >>> 24) & 255;
+        texels[i * 4 + 2] = Math.round(map.elevation[i] * 255);
+        texels[i * 4 + 3] = 255;
+      }
+      this.device.queue.writeTexture({ texture: this.terrainTex }, texels, { bytesPerRow: map.size * 4 }, [map.size, map.size]);
+      TERRAIN_TYPES.forEach((t, i) => data.set(recipe.palette[t], i * 4));
+      data.set([1, recipe.tileKm, map.size, recipe.seed % 100000], 24);
+    }
+    this.device.queue.writeBuffer(this.groundBuffer, 0, data);
+    this.pending.add('clouds');
   }
 
   setShapes(shapes: ShapeLayer[]): void {
@@ -270,6 +306,8 @@ export class Renderer {
         { binding: 4, resource: this.cloudCube.createView({ dimension: 'cube' }) },
         { binding: 5, resource: this.transmittanceLut.createView() },
         { binding: 6, resource: { buffer: this.downwellingBuffer } },
+        { binding: 7, resource: this.terrainTex.createView() },
+        { binding: 8, resource: { buffer: this.groundBuffer } },
       ],
     });
   }
@@ -289,6 +327,8 @@ export class Renderer {
         { binding: 8, resource: { buffer: accum } },
         { binding: 9, resource: cube.createView({ dimension: '2d-array' }) },
         { binding: 12, resource: this.shadowTex.createView() },
+        { binding: 14, resource: this.terrainTex.createView() },
+        { binding: 15, resource: { buffer: this.groundBuffer } },
       ],
     });
   }
@@ -374,6 +414,8 @@ export class Renderer {
           { binding: 4, resource: this.transmittanceLut.createView() },
           { binding: 5, resource: out.createView() },
           { binding: 6, resource: { buffer: downwelling } },
+          { binding: 7, resource: this.terrainTex.createView() },
+          { binding: 8, resource: { buffer: this.groundBuffer } },
         ],
       }));
       pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
