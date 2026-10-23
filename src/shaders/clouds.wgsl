@@ -85,6 +85,9 @@ const GROUND_BOUNCE_SCALE: f32 = 1.0;
 const POWDER_EXPONENT_KM: f32 = 0.15; // 150 per metre of extinction
 // skyCaptain: rayDistance * 1e-5 per metre in Takram's mip estimate.
 const MIP_PER_KM: f32 = 0.01;
+// Averages of the baked detail noise's two erosion terms (measured: E[d^6], E[1 - d]).
+const DETAIL_MEAN_POW6: f32 = 0.150;
+const DETAIL_MEAN_INVERSE: f32 = 0.303;
 const RECIPROCAL_PI4: f32 = 0.0795774715459;
 
 fn remap_clamped(x: f32, a: f32, b: f32) -> f32 {
@@ -142,7 +145,13 @@ struct Media {
   extinction: f32, // per km; scattering equals extinction (albedo 1, as upstream)
 }
 
-fn sample_media(w: Weather, p: vec3f, altitude: f32, mip: f32, jitter: f32) -> Media {
+// skyCaptain: detail_amount says how much of the fine detail this sample sees: 1 for the
+// view near the eye, fading with distance; 0 for light, which sees the detail's average
+// erosion instead. In a real cloud light diffuses through hundreds of metres of droplets,
+// so brightness follows the cloud's broad shape, while the fine structure shows at its
+// edges. Lighting through full detail lit every ~150 m bump as its own small globule.
+// (Takram switches detail on or off per ray by a jittered distance test, which speckled.)
+fn sample_media(w: Weather, p: vec3f, altitude: f32, detail_amount: f32) -> Media {
   var density = w.density;
   // Curl-noise turbulence, strongest at the cloud base.
   // skyCaptain: the turbulence field evolves with time (its slice moves), so ragged bases
@@ -158,16 +167,18 @@ fn sample_media(w: Weather, p: vec3f, altitude: f32, mip: f32, jitter: f32) -> M
   let shape = textureSampleLevel(shape_tex, repeat_sampler, local / params.scale.x, 0.0).r;
   density = remap_clamped(density, (1.0 - shape) * SHAPE_AMOUNT, 1.0);
 
-  if (mip * 0.5 + (jitter - 0.5) * 0.5 < 0.5) {
+  // Fluffy at the top and whippy at the bottom; the average erosion where detail is off.
+  let fluffy = remap_clamped(w.hf, 0.2, 0.4);
+  var modifier = mix(DETAIL_MEAN_POW6, DETAIL_MEAN_INVERSE, fluffy);
+  if (detail_amount > 0.0) {
     // skyCaptain: detail rides with the cloud and boils upward with the evolution, so in
     // slow real-time motion turrets rise and fringes churn. Takram drifts detail faster
     // than the shape, which at real speed reads as texture swimming through the cloud.
     let dp = (vec3f(p.x + params.wind.x, altitude - params.anim.x, p.z + params.wind.y) + turbulence) / params.scale.y;
     let detail = textureSampleLevel(detail_tex, repeat_sampler, dp, 0.0).r;
-    // Fluffy at the top and whippy at the bottom.
-    let modifier = mix(pow(detail, 6.0), 1.0 - detail, remap_clamped(w.hf, 0.2, 0.4)) * params.cloud.w;
-    density = remap_clamped(density * 2.0, modifier * 0.5, 1.0);
+    modifier = mix(modifier, mix(pow(detail, 6.0), 1.0 - detail, fluffy), detail_amount);
   }
+  density = remap_clamped(density * 2.0, modifier * params.cloud.w * 0.5, 1.0);
   // Density profile, then Takram's saturate() at 1 per metre (1000 per km).
   let profile = PROFILE_LINEAR * w.hf + PROFILE_CONSTANT;
   var m: Media;
@@ -193,11 +204,18 @@ struct Depth {
   distance: f32,
 }
 
-fn media_at(p: vec3f, mip: f32, jitter: f32) -> f32 {
+// Extinction at p, seeing detail_amount of the fine detail (see sample_media).
+fn media_at(p: vec3f, detail_amount: f32) -> f32 {
   let altitude = length(p) - ground_radius();
   let w = sample_weather(p, altitude);
   if (w.density <= MIN_DENSITY) { return 0.0; }
-  return sample_media(w, p, altitude, mip, jitter).extinction;
+  return sample_media(w, p, altitude, detail_amount).extinction;
+}
+
+// How much detail the view sees at a distance: full near the eye, fading out far away,
+// smoothly (it used to switch on and off per ray, which speckled distant clouds).
+fn view_detail(mip: f32) -> f32 {
+  return 1.0 - smoothstep(0.35, 1.1, mip);
 }
 
 // marchOpticalDepth: a few short, doubling steps.
@@ -214,7 +232,8 @@ fn march_optical_depth(origin: vec3f, dir: vec3f, max_iterations: i32, mip: f32,
   var next = step_size * jitter;
   for (var i = 0; i < iterations; i++) {
     r.distance = next;
-    r.optical_depth += media_at(origin + dir * next, mip, jitter) * step_size;
+    // Light sees the smooth field (see sample_media).
+    r.optical_depth += media_at(origin + dir * next, 0.0) * step_size;
     next += step_size;
     step_size *= SECONDARY_STEP_SCALE;
   }
@@ -232,8 +251,9 @@ fn far_optical_depth(origin: vec3f, start: f32, jitter: f32) -> f32 {
   for (var i = 0; i < steps; i++) {
     let p = origin + sun * t;
     if (length(p) - ground_radius() >= cloud_top()) { break; }
-    // With detail: coarse density keeps the thin fringe that detail erodes, which over-darkens.
-    depth += media_at(p, 0.0, 0.0) * ds;
+    // The detail's average erosion: raw coarse density keeps the thin fringe that detail
+    // erodes, which over-darkens; full detail shades every small bump.
+    depth += media_at(p, 0.0) * ds;
     t += ds;
     ds *= 1.8;
   }
@@ -289,7 +309,7 @@ fn layer_optical_depth(p: vec3f, dir: vec3f, steps: i32, jitter: f32) -> f32 {
   let dt = (t1 - t0) / f32(steps);
   var depth = 0.0;
   for (var i = 0; i < steps; i++) {
-    depth += media_at(p + dir * (t0 + (f32(i) + jitter) * dt), 0.0, 0.0) * dt;
+    depth += media_at(p + dir * (t0 + (f32(i) + jitter) * dt), 0.0) * dt;
   }
   return depth;
 }
@@ -627,7 +647,7 @@ fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchRes
       d += mix(step_size, MAX_STEP_KM, min(1.0, mip));
       continue;
     }
-    let media = sample_media(w, p, altitude, mip, jitter);
+    let media = sample_media(w, p, altitude, view_detail(mip));
     if (media.extinction > MIN_EXTINCTION) {
       let sun_irradiance = illum * sun_transmittance(p);
       let surface_normal = normalize(p);
@@ -752,7 +772,8 @@ fn rng_next(r: ptr<function, Rng>) -> f32 {
 
 fn reference_extinction(p: vec3f) -> f32 {
   // mip 0 with jitter 0 always takes the detail branch.
-  return media_at(p, 0.0, 0.0);
+  // The reference sees all the detail: it is the ground truth for the approximations.
+  return media_at(p, 1.0);
 }
 
 // Distance along dir until the ray leaves the cloud shell (from inside or below it).
