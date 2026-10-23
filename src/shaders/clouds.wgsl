@@ -104,28 +104,33 @@ fn sample_weather(p: vec3f, altitude: f32) -> Weather {
 
 // skyCaptain: storm anvils, which Takram's 2.5D layers cannot make (a cloud's footprint
 // is the same at every height). A plate hangs under the top of the shell where storms
-// author one: flat-topped (the tropopause caps it), softer underneath, thick over the
-// tower and thinning downwind. In height fractions of the tower layer: the top sits at
-// ANVIL_TOP, just above where the tapered tower gives out, and the plate is ANVIL_DEPTH
-// deep at the core. Its height fraction for erosion and the density profile is the
-// upper part of a cloud, so it reads as dense and smooth-topped.
-const ANVIL_TOP: f32 = 0.84;
-const ANVIL_DEPTH: f32 = 0.26;
+// author one (weather.wgsl anvil()): flat-topped where the tropopause caps it, with a
+// low dome over the core, a lumpy underside, and a deep bulge down into the tower. In
+// height fractions of the tower layer the top sits at ANVIL_TOP, just above where the
+// tapered tower gives out, and the core bulge reaches ANVIL_DEPTH below it. Its height
+// fraction for erosion and the density profile is the upper part of a cloud, so it reads
+// smooth-topped and churns at the fringes.
+const ANVIL_TOP: f32 = 0.86;
+const ANVIL_DEPTH: f32 = 0.5;
+const ANVIL_DOME: f32 = 0.04;
 fn with_anvil(layer: Weather, uv: vec2f, altitude: f32) -> Weather {
   let upper = textureSampleLevel(upper_tex, clamp_sampler, uv, 0.0);
   if (upper.r <= 0.0) { return layer; }
   let tower = cloud_top() - cloud_bottom();
-  let top = cloud_bottom() + ANVIL_TOP * tower;
-  // 0 at the flat top, 1 at the base of the plate.
-  let a = (top - altitude) / max(ANVIL_DEPTH * tower * upper.g, 1e-3);
+  // The dome rides on the core bulge (depth near 1).
+  let top = cloud_bottom() + (ANVIL_TOP + ANVIL_DOME * smoothstep(0.5, 1.0, upper.g)) * tower;
+  let depth = ANVIL_DEPTH * tower * upper.g * mix(0.3, 1.6, upper.b * upper.b);
+  // 0 at the top, 1 at the base of the plate.
+  let a = (top - altitude) / max(depth, 1e-3);
   if (a <= 0.0 || a >= 1.0) { return layer; }
-  let vertical = smoothstep(0.0, 0.06, a) * (1.0 - smoothstep(0.45, 1.0, a));
-  let density = upper.r * vertical;
+  let vertical = smoothstep(0.0, 0.05, a) * (1.0 - smoothstep(0.3, 1.0, a));
+  // Below 1 so the shape noise still carves texture into the underside.
+  let density = upper.r * vertical * 0.8;
   if (density <= layer.density) { return layer; }
   var w: Weather;
   w.density = density;
-  w.hf = mix(0.95, 0.6, a);
-  w.scale = 1.0;
+  w.hf = mix(0.95, 0.55, a);
+  w.scale = upper.a;
   return w;
 }
 

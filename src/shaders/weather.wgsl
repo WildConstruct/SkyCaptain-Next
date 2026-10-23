@@ -46,7 +46,7 @@ const SHAPE_HAZE_SHEET = 4.0;
 // warp: displacement in km (xy)
 @group(0) @binding(4) var warp_tex: texture_2d<f32>;
 @group(0) @binding(5) var layer_sampler: sampler;
-// Upper level: r = anvil amount, g = anvil thickness (fraction of the full anvil depth).
+// Upper level: storm anvils (see anvil()).
 @group(0) @binding(6) var upper_out: texture_storage_2d<rgba8unorm, write>;
 
 fn weather_fbm(uv: vec2f, freq: i32, seed: f32) -> f32 {
@@ -203,31 +203,40 @@ fn apply_shape(cell: Cell, shape: Shape, xz: vec2f) -> Cell {
 
 // Anvil: a mature storm's tower spreads out under the tropopause into a flat plate that
 // the upper winds stretch downwind. In storm-local units of the core radius it overhangs
-// a little upwind, runs ANVIL_LENGTH downwind and widens as it goes, thinning toward the
-// tip; its edges break up into fibrous streaks. Only strong storms grow one, so keying a
-// storm's strength up grows the anvil with it. The shape's rotation points it.
-const ANVIL_LENGTH = 3.5;
+// a little upwind, runs ANVIL_LENGTH downwind and widens as it goes, thinning and turning
+// translucent (ice) toward the tip; its edges break up into fibrous streaks. Over the core
+// the plate bulges down into the tower so the two read as one cloud. Only strong storms
+// grow one, so keying a storm's strength up grows the anvil with it. The shape's rotation
+// points it.
+// Written to the upper-level map: r = amount, g = depth (1 = the full core bulge),
+// b = underside undulation, a = density (opaque over the core, thin at the tip).
+const ANVIL_LENGTH = 5.0;
 const ANVIL_OVERHANG = 0.7;
-fn anvil(shape: Shape, xz: vec2f) -> vec2f {
-  if (shape.kind != SHAPE_STORM_CELL) { return vec2f(0.0); }
+fn anvil(shape: Shape, xz: vec2f) -> vec4f {
+  if (shape.kind != SHAPE_STORM_CELL) { return vec4f(0.0); }
   let r = shape.rotation;
   let rel = xz - shape.center;
   let core = max(shape.size, 0.1);
   let along = (r.x * rel.x + r.y * rel.y) / core;
   let across = (-r.y * rel.x + r.x * rel.y) / core;
   let t = clamp(along, 0.0, ANVIL_LENGTH) / ANVIL_LENGTH;
-  let half_width = mix(1.15, 2.1, sqrt(t));
+  let half_width = mix(1.2, 2.8, sqrt(t));
   var d_along = 0.0;
   if (along < 0.0) { d_along = -along / ANVIL_OVERHANG; }
   if (along > ANVIL_LENGTH) { d_along = (along - ANVIL_LENGTH) / 0.6; }
   // Fibrous edges: streaks run along the anvil, so stretch the noise downwind.
-  let streak_p = vec2f(along * 0.35, across * 1.6) * core;
-  let streaks = shape_noise(streak_p, 3.0, shape.seed + 11.0);
-  let d = length(vec2f(d_along, abs(across) / half_width)) + (streaks - 0.5) * 0.45;
+  let streaks = shape_noise(vec2f(along * 0.35, across * 1.6) * core, 3.0, shape.seed + 11.0);
+  // Broad lobes on the outline, then streaks along it.
+  let lobes = shape_noise(xz, core * 1.5, shape.seed + 5.0);
+  let d = length(vec2f(d_along, abs(across) / half_width)) + (lobes - 0.5) * 0.7 + (streaks - 0.5) * 0.5;
   let mature = smoothstep(0.35, 0.85, shape.strength);
-  let amount = mature * (1.0 - smoothstep(0.6, 1.0, d)) * (1.0 - 0.55 * smoothstep(0.4, 1.0, t));
-  let thickness = mix(1.0, 0.35, smoothstep(0.0, 1.0, t)) * mix(0.8, 1.0, streaks);
-  return vec2f(amount, thickness);
+  let amount = mature * (1.0 - smoothstep(0.55, 1.0, d)) * (1.0 - 0.4 * smoothstep(0.5, 1.0, t));
+  // A thin plate everywhere, bulging deep over the core where the tower feeds it.
+  let bulge = exp(-(along * along + across * across) / 0.9);
+  let depth = max(mix(0.3, 0.1, smoothstep(0.0, 1.0, t)), bulge);
+  let undulation = shape_noise(xz, 2.5, shape.seed + 19.0);
+  let density = mix(1.0, 0.3, smoothstep(0.15, 1.0, t));
+  return vec4f(amount, depth, undulation, density);
 }
 
 @compute @workgroup_size(8, 8)
@@ -254,7 +263,7 @@ fn generate(@builtin(global_invocation_id) id: vec3u) {
   cell.kind = mix(0.3, 0.55, bg.y / max(bg.x + bg.y, 1e-3)) * step(1e-3, bg.x + bg.y);
   cell.density = mix(0.6, 1.0, weather_fbm(uv, max(1, i32(round(extent / 60.0))) * 8, seed + 23.0));
 
-  var upper = vec2f(0.0);
+  var upper = vec4f(0.0);
   for (var i = 0u; i < min(shapes.count, 16u); i++) {
     cell = apply_shape(cell, shapes.items[i], xz);
     let a = anvil(shapes.items[i], xz);
@@ -273,5 +282,5 @@ fn generate(@builtin(global_invocation_id) id: vec3u) {
   let local_weather = max(max(background * open, cell.amount * authored_cells(xz, cell.kind, seed_u)), cell.direct);
   let authored = clamp(max(cell.amount, cell.direct) * 2.0, 0.0, 1.0);
   textureStore(weather_out, id.xy, vec4f(local_weather, cell.kind, cell.density * open, authored));
-  textureStore(upper_out, id.xy, vec4f(upper, 0.0, 0.0));
+  textureStore(upper_out, id.xy, upper);
 }
