@@ -126,7 +126,7 @@ export function packParams(s: Settings, frame: number, q: Quality = QUALITY[s.qu
     s.coverage, s.typeBias, s.density, s.erosion,
     s.ambient, s.forwardG, s.backG, s.backWeight,
     s.msA, s.msB, s.msC, s.powder,
-    s.windX, s.windZ, s.windX * 1.6, s.windZ * 1.6,
+    s.windX, s.windZ, 0, 0,
     q.viewSteps, q.lightSteps, q.faceSize, frame,
     s.haze, s.groundAlbedo, s.seed, s.octaves,
     s.evolve, 0, 0, 0,

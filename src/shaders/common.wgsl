@@ -7,7 +7,7 @@ struct Params {
   cloud: vec4f,       // coverage, type bias, density (extinction per km), detail erosion
   light: vec4f,       // ambient strength, forward g, back g, back lobe weight
   ms: vec4f,          // octave a (scatter), b (extinction), c (eccentricity), powder
-  wind: vec4f,        // shape offset xz (km), detail offset xz (km)
+  wind: vec4f,        // weather offset xz (km): shape and detail ride with it; zw unused
   march: vec4f,       // max view steps, light steps, cube face size, frame index
   misc: vec4f,        // haze distance, ground albedo, weather seed, scattering octave count
   anim: vec4f,        // x = evolution: upward scroll of the shape noise (km); yzw unused
