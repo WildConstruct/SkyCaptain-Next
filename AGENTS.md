@@ -6,7 +6,9 @@ separate tool. Do not build hero-cloud or fly-through features here.
 
 ## Product rules
 
-- **Fixed eye.** The camera never leaves the ground point. Clouds and sky render
+- **Fixed eye.** The camera is one point: on the ground by default, or raised by the
+  Elevation setting up to and above the clouds (for aerial and above-the-clouds
+  environments), but it never moves within a render. Clouds and sky render
   straight into the environment cube; the viewport only samples that cube. The
   preview and the HDRI export use the same buffer, so they match by construction.
 - **Universal hardware.** Budgets target an M1-class GPU. Faster GPUs converge

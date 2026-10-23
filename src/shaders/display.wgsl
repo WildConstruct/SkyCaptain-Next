@@ -25,7 +25,9 @@ fn ground_ambient(dir: vec3f) -> vec3f {
     textureSampleLevel(transmittance_lut, cube_sampler, uvs.xy, 0.0).rgb
       / max(textureSampleLevel(transmittance_lut, cube_sampler, uvs.zw, 0.0).rgb, vec3f(1e-6)),
     vec3f(0.0), vec3f(1.0));
-  return air * params.misc.y / PI * downwelling.rgb;
+  // From above the clouds the ground's sky light is computed per point in the cloud pass.
+  let below = 1.0 - smoothstep(params.layer.x, params.layer.x + 0.3, eye_altitude(params.anim.y));
+  return air * params.misc.y / PI * downwelling.rgb * below;
 }
 
 struct VsOut {

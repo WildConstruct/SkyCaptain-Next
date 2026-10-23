@@ -27,6 +27,10 @@ const BAYER_OFFSETS = array<vec2u, 16>(
 
 fn ground_radius() -> f32 { return params.layer.z; }
 fn eye() -> vec3f { return vec3f(0.0, ground_radius() + eye_altitude(params.anim.y), 0.0); }
+// 0 with the eye under the cloud base, 1 from 300 m above it (see ground_radiance).
+fn above_clouds_weight() -> f32 {
+  return smoothstep(params.layer.x, params.layer.x + 0.3, eye_altitude(params.anim.y));
+}
 fn cloud_bottom() -> f32 { return params.layer.x; }
 // Top of the march shell: the tallest tower possible.
 fn cloud_top() -> f32 { return params.layer.y; }
@@ -254,6 +258,7 @@ fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
 const GROUND_SHADOW_KM: f32 = 12.0;
 const GROUND_SHADOW_STEPS: i32 = 96;
 const DISTANT_SHADOW_STEPS: i32 = 24;
+const OVERHEAD_STEPS: i32 = 12;
 
 fn transmittance_lut_at(r: f32, mu: f32) -> vec3f {
   let uv = vec2f(mu * 0.5 + 0.5, clamp((r - ground_radius()) / (params.layer.w - ground_radius()), 0.0, 1.0));
@@ -314,6 +319,18 @@ fn ground_radiance(dir: vec3f, jitter: vec3f) -> vec3f {
       shadow = exp(-layer_optical_depth(g, sun, DISTANT_SHADOW_STEPS, jitter.x));
     }
     direct = illum * transmittance_lut_at(length(g), cos_sun) * cos_sun * shadow;
+  }
+  // skyCaptain: the ground's sky light is normally integrated from the finished cube at
+  // composite time (display.wgsl ground_ambient), which is right for ground near an eye
+  // under the clouds. From above them, the eye sees clear sky the ground below does not:
+  // there, light each ground point by the sky dimmed by the cloud straight above it
+  // (cloud bottoms still pass some light down).
+  let above = above_clouds_weight();
+  if (above > 0.0) {
+    let sky_top = textureSampleLevel(sky_tex, clamp_sampler, vec3f(0.0, 1.0, 0.0), 0.0).rgb;
+    let sky_side = textureSampleLevel(sky_tex, clamp_sampler, normalize(vec3f(1.0, 0.25, 0.0)), 0.0).rgb;
+    let overhead = exp(-layer_optical_depth(g, n, OVERHEAD_STEPS, jitter.y));
+    direct += above * PI * (sky_top * 0.5 + sky_side * 0.5) * mix(0.35, 1.0, overhead);
   }
   // Air between the eye and the ground point.
   let uvs = ground_air_uvs(dir, ground_radius(), params.layer.w, eye_altitude(params.anim.y));

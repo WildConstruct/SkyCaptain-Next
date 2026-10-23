@@ -10,7 +10,10 @@ low-sun towering cloud.*
 
 ## How it renders
 
-The eye is fixed, so clouds don't depend on where the camera is looking. They are
+The eye is fixed, so clouds don't depend on where the camera is looking. It stands on the
+ground unless the **Eye → Elevation** slider raises it (0-20 km): then the sky, sun and air
+are computed from that height, the clouds are marched from below, inside or above the
+layer, and the ground is seen through and between them. They are
 raymarched once into the environment cube, and the viewport only samples it.
 
 | Pass | Runs when | Notes |
@@ -176,7 +179,14 @@ scene plausibly:
   the sun's transmittance through the cloud layer, marched once per change.
 - **Ground albedo** (Expert) defaults to 0.25, a typical average for land.
 
-The eye is 2 m up, so almost all of the visible ground is within ~100 m of the camera
+From an elevated eye the ground reaches to a far horizon: past the shadow map, each ground
+point marches its cloud shadow directly, and once the eye is above the cloud base the
+ground's sky light is taken per point, dimmed by the cloud above it (the integrated
+environment would be the clear sky seen from up there). The weather map repeats past its
+edge, so clouds continue to the horizon; at very wide views the 300 km repeat can show.
+The ground itself is a uniform albedo, which reads as plain grey from altitude.
+
+On the ground the eye is 2 m up, so almost all of the visible ground is within ~100 m of the camera
 and the far ground is a thin strip at the horizon. The ground therefore shows whether the
 camera's own spot is in sun or cloud shadow, as a real HDRI shot there would; in an
 animation it brightens and dims as cloud shadows pass over.
