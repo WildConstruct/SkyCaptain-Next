@@ -394,7 +394,9 @@ fn terrain_shadow(g: vec3f, sun: vec3f, jitter: f32) -> f32 {
 fn air_between(o: vec3f, p: vec3f, dir: vec3f) -> vec3f {
   let ro = length(o);
   let rp = length(p);
-  if (ground_hit(rp, vec3f(0.0, dot(normalize(p), dir), length(cross(normalize(p), dir))), ground_radius()) < 0.0) {
+  // Heading up at p, the ray escapes onward; heading down (a hit on the ground below the
+  // eye), the reversed ray from p escapes back past the eye.
+  if (dot(p / rp, dir) >= 0.0) {
     // Onward from p the ray escapes: T(o -> p) = T(o -> top) / T(p -> top).
     return clamp(transmittance_lut_at(ro, dot(o / ro, dir)) / max(transmittance_lut_at(rp, dot(p / rp, dir)), vec3f(1e-6)), vec3f(0.0), vec3f(1.0));
   }

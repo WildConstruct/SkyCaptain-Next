@@ -744,8 +744,8 @@ export class Renderer {
   }
 
   // Debug: reads one texel as floats. Used by tools/ to inspect scene-linear values.
-  async readTexel(name: 'sky' | 'cloud' | 'transmittance' | 'ms' | 'weather' | 'shape', x: number, y: number, layer = 0): Promise<number[]> {
-    const tex = { sky: this.skyCube, cloud: this.cloudCube, transmittance: this.transmittanceLut, ms: this.msLut, weather: this.weatherTex, shape: this.shapeTex }[name];
+  async readTexel(name: 'sky' | 'cloud' | 'transmittance' | 'ms' | 'weather' | 'shape' | 'ground', x: number, y: number, layer = 0): Promise<number[]> {
+    const tex = { sky: this.skyCube, cloud: this.cloudCube, transmittance: this.transmittanceLut, ms: this.msLut, weather: this.weatherTex, shape: this.shapeTex, ground: this.groundCube }[name];
     const half = tex.format === 'rgba16float';
     const buffer = this.device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const encoder = this.device.createCommandEncoder();
