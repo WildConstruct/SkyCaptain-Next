@@ -149,6 +149,7 @@ async function main(): Promise<void> {
     skyTools: tools,
     skyHistory: history,
     skyCapture: (w: number, h: number) => renderer.capture(viewUniforms(settings, w / h), w, h),
+    skyConverge: () => renderer.converge(),
   });
 
   const inputs = new Map<keyof Settings, { input: HTMLInputElement; value: HTMLElement; unit: string }>();
@@ -419,7 +420,7 @@ async function main(): Promise<void> {
     layers.flush((name, x, y, w, h, data) => renderer.uploadLayer(name, x, y, w, h, data));
     const stats = renderer.frame(viewUniforms(settings, canvas.width / canvas.height));
     const progress = stats.frame >= stats.totalFrames ? 'converged' : `refining ${stats.frame}/${stats.totalFrames}`;
-    const timing = stats.cloudMs === null ? '' : ` · cloud pass ${stats.cloudMs.toFixed(2)} ms`;
+    const timing = stats.cloudMs === null ? '' : ` · cloud pass ${stats.cloudMs.toFixed(2)} ms${stats.passes > 1 ? ` ×${stats.passes}` : ''}`;
     status.textContent = `${progress}${timing} · ${stats.faceSize}² cube · ${adapter}`;
     document.body.dataset.converged = String(stats.frame >= stats.totalFrames);
     refreshMinimap();

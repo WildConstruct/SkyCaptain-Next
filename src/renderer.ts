@@ -15,6 +15,11 @@ const SKY_FACE = 256;
 /** 11 vec4f: must match Params in common.wgsl. */
 const PARAMS_BYTES = 176;
 export const WEATHER_SIZE = 1024;
+/** GPU time per display frame spent on cloud passes, ms (the rest is left for the page). */
+const FRAME_BUDGET_MS = 10;
+const MAX_PASSES_PER_FRAME = 32;
+/** converge() waits for the GPU every this many passes, so the queue stays short. */
+const CONVERGE_PASSES_IN_FLIGHT = 8;
 const TRANSMITTANCE_SIZE: [number, number] = [256, 64];
 const MS_SIZE = 32;
 
@@ -22,6 +27,8 @@ export interface FrameStats {
   frame: number;
   totalFrames: number;
   cloudMs: number | null;
+  /** Cloud passes dispatched this display frame. */
+  passes: number;
   faceSize: number;
 }
 
@@ -75,6 +82,8 @@ export class Renderer {
   private downwellingBindGroup!: GPUBindGroup;
   /** While an export runs, the interactive view stops refining clouds. */
   private exporting = false;
+  /** converge() is running: the display loop draws but does not dispatch clouds. */
+  private converging = false;
 
   private cloudBindGroup!: GPUBindGroup;
   private referenceBindGroup!: GPUBindGroup;
@@ -470,44 +479,77 @@ export class Renderer {
     return this.cloudFrame >= 16 * QUALITY[this.settings.quality].samples;
   }
 
-  frame(viewData: Float32Array<ArrayBuffer>): FrameStats {
-    const d = this.device;
+  /** Records one progressive cloud pass at the current cloudFrame (params must already hold it). */
+  private encodeCloudPass(encoder: GPUCommandEncoder, timed: boolean): void {
     const quality = QUALITY[this.settings.quality];
+    const ts = timed ? this.timestamps : null;
+    const pass = encoder.beginComputePass({
+      label: 'clouds',
+      timestampWrites: ts ? { querySet: ts.query, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } : undefined,
+    });
+    const reference = this.settings.quality === 'reference';
+    pass.setPipeline(reference ? this.referencePipeline : this.cloudPipeline);
+    pass.setBindGroup(0, reference ? this.referenceBindGroup : this.cloudBindGroup);
+    const groups = Math.ceil(quality.faceSize / 4 / 8);
+    pass.dispatchWorkgroups(groups, groups, 6);
+    pass.end();
+    if (ts) {
+      encoder.resolveQuerySet(ts.query, 0, 2, ts.resolve, 0);
+      encoder.copyBufferToBuffer(ts.resolve, 0, ts.read, 0, 16);
+    }
+  }
+
+  /** Applies pending edits: the sky, weather and ground shadow, and restarts convergence. */
+  private prepare(encoder: GPUCommandEncoder): void {
     if (this.pending.size > 0 && [...this.pending].some((p) => p !== 'view')) {
       this.allocateCloudTargets();
       this.cloudFrame = 0;
     }
-    const encoder = d.createCommandEncoder();
-    d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
-    d.queue.writeBuffer(this.viewBuffer, 0, viewData);
+    this.device.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
     this.flushPending(encoder);
+  }
+
+  /**
+   * Cloud passes to run this display frame: as many as fit in FRAME_BUDGET_MS of measured
+   * GPU time, so a fast GPU converges in a few frames while an M1 still gets one or two and
+   * stays interactive. Without timestamp queries there is no measurement: one pass.
+   */
+  private passesThisFrame(): number {
+    if (this.lastCloudMs === null || this.lastCloudMs <= 0) return 1;
+    return Math.max(1, Math.min(MAX_PASSES_PER_FRAME, Math.floor(FRAME_BUDGET_MS / this.lastCloudMs)));
+  }
+
+  frame(viewData: Float32Array<ArrayBuffer>): FrameStats {
+    const d = this.device;
+    const quality = QUALITY[this.settings.quality];
+    let encoder = d.createCommandEncoder();
+    d.queue.writeBuffer(this.viewBuffer, 0, viewData);
+    this.prepare(encoder);
 
     let timed = false;
-    const dispatchClouds = !this.converged && this.inFlight < 2 && !this.exporting;
-    if (dispatchClouds) {
-      const ts = this.timestamps && !this.timestamps.busy ? this.timestamps : null;
-      const pass = encoder.beginComputePass({
-        label: 'clouds',
-        timestampWrites: ts ? { querySet: ts.query, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } : undefined,
-      });
-      const reference = this.settings.quality === 'reference';
-      pass.setPipeline(reference ? this.referencePipeline : this.cloudPipeline);
-      pass.setBindGroup(0, reference ? this.referenceBindGroup : this.cloudBindGroup);
-      const groups = Math.ceil(quality.faceSize / 4 / 8);
-      pass.dispatchWorkgroups(groups, groups, 6);
-      pass.end();
-      this.integrateDownwelling(encoder, this.downwellingBindGroup);
-      if (ts) {
-        encoder.resolveQuerySet(ts.query, 0, 2, ts.resolve, 0);
-        encoder.copyBufferToBuffer(ts.resolve, 0, ts.read, 0, 16);
-        timed = true;
+    let dispatched = 0;
+    if (!this.exporting && !this.converging && this.inFlight < 2) {
+      const passes = this.passesThisFrame();
+      while (dispatched < passes && !this.converged) {
+        if (dispatched > 0) {
+          // Each pass reads its own frame index from params: submit the previous pass before
+          // writing the next one's.
+          d.queue.submit([encoder.finish()]);
+          encoder = d.createCommandEncoder();
+          d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
+        }
+        const time = dispatched === 0 && !!this.timestamps && !this.timestamps.busy;
+        this.encodeCloudPass(encoder, time);
+        timed ||= time;
+        this.cloudFrame++;
+        dispatched++;
       }
-      this.cloudFrame++;
+      if (dispatched > 0) this.integrateDownwelling(encoder, this.downwellingBindGroup);
     }
 
     if (this.context) this.drawView(encoder, this.context.getCurrentTexture());
     d.queue.submit([encoder.finish()]);
-    if (dispatchClouds) {
+    if (dispatched > 0) {
       this.inFlight++;
       d.queue.onSubmittedWorkDone().then(() => { this.inFlight--; });
     }
@@ -527,8 +569,35 @@ export class Renderer {
       frame: this.cloudFrame,
       totalFrames: 16 * quality.samples,
       cloudMs: this.lastCloudMs,
+      passes: dispatched,
       faceSize: quality.faceSize,
     };
+  }
+
+  /**
+   * Runs cloud passes back to back until the view cube is converged, not paced by the
+   * display: for capturing clips. Keeps a few passes in flight so the GPU never idles.
+   */
+  async converge(): Promise<void> {
+    const d = this.device;
+    this.converging = true;
+    try {
+      const prep = d.createCommandEncoder();
+      this.prepare(prep);
+      d.queue.submit([prep.finish()]);
+      while (!this.converged) {
+        d.queue.writeBuffer(this.paramsBuffer, 0, packParams(this.settings, this.cloudFrame));
+        const encoder = d.createCommandEncoder();
+        this.encodeCloudPass(encoder, false);
+        this.cloudFrame++;
+        if (this.converged) this.integrateDownwelling(encoder, this.downwellingBindGroup);
+        d.queue.submit([encoder.finish()]);
+        if (this.cloudFrame % CONVERGE_PASSES_IN_FLIGHT === 0) await d.queue.onSubmittedWorkDone();
+      }
+      await d.queue.onSubmittedWorkDone();
+    } finally {
+      this.converging = false;
+    }
   }
 
   private drawView(encoder: GPUCommandEncoder, target: GPUTexture): void {
