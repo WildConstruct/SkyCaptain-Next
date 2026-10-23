@@ -13,8 +13,8 @@ import exportWgsl from './shaders/export.wgsl?raw';
 import { Invalidation, QUALITY, Quality, Settings, packParams } from './settings';
 import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
 import type { LayerName } from './paint';
-import { HEIGHT_GRID, TERRAIN_TYPES, type HeightField, type TerrainMap, type TerrainRecipe } from './terrain';
-import { toHalf } from './half';
+import { HEIGHT_GRID, TERRAIN_TYPES, type HeightField, type Standpoint, type TerrainMap, type TerrainRecipe } from './terrain';
+import { fromHalf, toHalf } from './half';
 
 const SKY_FACE = 256;
 /** 11 vec4f: must match Params in common.wgsl. */
@@ -22,8 +22,8 @@ const PARAMS_BYTES = 176;
 export const WEATHER_SIZE = 1024;
 /** Largest terrain grid the ground texture holds. */
 const TERRAIN_TEXTURE_MAX = 256;
-/** Ground uniform (ground.wgsl Ground): 6 palette vec4s, info, relief and waves. */
-const GROUND_BYTES = 9 * 16;
+/** Ground uniform (ground.wgsl Ground): 6 palette vec4s, info, relief, waves and place. */
+const GROUND_BYTES = 10 * 16;
 /** Ocean slope texture mip levels (256 down to 1). */
 const OCEAN_MIPS = Math.log2(OCEAN_N) + 1;
 /** GPU time per display frame spent on cloud passes, ms (the rest is left for the page). */
@@ -80,6 +80,7 @@ export class Renderer {
     groups: { spectrum: GPUBindGroup; fft: [GPUBindGroup, GPUBindGroup]; pack: GPUBindGroup; mips: GPUBindGroup[] };
   };
   private waves = { windMs: 6, headingDeg: 70, fetchKm: 40 };
+  private oceanSampler!: GPUSampler;
   private oceanKey = '';
   private layerTex: Record<LayerName, GPUTexture>;
   private shapes: ShapeLayer[] = [];
@@ -134,7 +135,13 @@ export class Renderer {
     if (!adapter) throw new Error('No WebGPU adapter found.');
     const features: GPUFeatureName[] = adapter.features.has('timestamp-query') ? ['timestamp-query'] : [];
     // Default limits suffice: the largest buffer (Ultra accumulation) is 48 MiB.
-    const device = await adapter.requestDevice({ requiredFeatures: features });
+    // Large cube faces need big accumulation buffers (6 x 2048^2 x 8 bytes is 192 MB, past
+    // WebGPU's 128 MB default): ask for what the adapter really allows.
+    const requiredLimits = {
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+      maxBufferSize: adapter.limits.maxBufferSize,
+    };
+    const device = await adapter.requestDevice({ requiredFeatures: features, requiredLimits });
     device.lost.then((info) => console.error('WebGPU device lost:', info.reason, info.message));
     device.onuncapturederror = (e) => console.error('WebGPU error:', e.error.message);
     return new Renderer(device, present ? canvas : null, settings, noise);
@@ -149,7 +156,7 @@ export class Renderer {
     this.context?.configure({ device, format: this.format, alphaMode: 'opaque' });
 
     this.paramsBuffer = device.createBuffer({ size: PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.viewBuffer = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.viewBuffer = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.repeatSampler = device.createSampler({
       magFilter: 'linear', minFilter: 'linear',
       addressModeU: 'repeat', addressModeV: 'repeat', addressModeW: 'repeat',
@@ -239,17 +246,29 @@ export class Renderer {
    * Shows a terrain layout on the ground, or plain ground (the albedo slider) for null.
    * Changing the ground re-renders the cube: the cloud pass shades the ground's sun light.
    */
-  setTerrain(terrain: { map: TerrainMap; recipe: TerrainRecipe; height?: HeightField } | null): void {
+  setTerrain(terrain: { map: TerrainMap; recipe: TerrainRecipe; height?: HeightField; place?: Standpoint } | null): void {
     const data = new Float32Array(GROUND_BYTES / 4);
     this.terrainOrigin = 0;
     if (terrain) {
       const { map, recipe, height } = terrain;
+      const place = terrain.place ?? { x: 0, z: 0, bearing: 0 };
+      data.set([place.x, place.z, 0, 0], 36);
       if (height && recipe.heightKm > 0) {
         const halves = new Uint16Array(height.heights.length);
         for (let i = 0; i < halves.length; i++) halves[i] = toHalf(height.heights[i]);
         this.device.queue.writeTexture({ texture: this.heightTex }, halves, { bytesPerRow: height.size * 2 }, [height.size, height.size]);
-        this.terrainOrigin = height.atOrigin;
-        data.set([recipe.heightKm, height.atOrigin, recipe.snowKm, 0], 28);
+        // The eye stands on the ground as the GPU reads it: half floats resolve heights of a
+        // few km only to ~2 m, so an eye placed on the exact height could sit inside it.
+        // Bilinear at the standpoint, wrapping, as the shader's linear filter reads it.
+        const n = height.size;
+        const period = recipe.tileKm * map.size;
+        const fx = ((((place.x / period) % 1) + 1) % 1) * n - 0.5;
+        const fz = ((((place.z / period) % 1) + 1) % 1) * n - 0.5;
+        const x0 = Math.floor(fx), z0 = Math.floor(fz);
+        const h = (x: number, z: number) => fromHalf(halves[(((z % n) + n) % n) * n + (((x % n) + n) % n)]);
+        const ax = fx - x0, az = fz - z0;
+        this.terrainOrigin = (h(x0, z0) * (1 - ax) + h(x0 + 1, z0) * ax) * (1 - az) + (h(x0, z0 + 1) * (1 - ax) + h(x0 + 1, z0 + 1) * ax) * az;
+        data.set([recipe.heightKm, this.terrainOrigin, recipe.snowKm, 0], 28);
       }
       const texels = new Uint8Array(map.size * map.size * 4);
       for (let i = 0; i < map.types.length; i++) {
@@ -272,6 +291,12 @@ export class Renderer {
 
   private createOcean(m: GPUShaderModule, compute: (m: GPUShaderModule, entry: string) => GPUComputePipeline): void {
     const d = this.device;
+    // Trilinear and anisotropic: nearest mip selection showed as square blocks where the
+    // level changes, and grazing water needs detail kept across the view, not along it.
+    this.oceanSampler = d.createSampler({
+      magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', maxAnisotropy: 8,
+      addressModeU: 'repeat', addressModeV: 'repeat',
+    });
     const n = OCEAN_N;
     const params = d.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const noise = d.createBuffer({ size: 3 * n * n * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
@@ -418,7 +443,7 @@ export class Renderer {
         { binding: 8, resource: { buffer: this.groundBuffer } },
         { binding: 9, resource: this.groundCube.createView({ dimension: 'cube' }) },
         { binding: 10, resource: this.oceanView() },
-        { binding: 11, resource: this.repeatSampler },
+        { binding: 11, resource: this.oceanSampler },
       ],
     });
   }
@@ -453,7 +478,7 @@ export class Renderer {
         { binding: 17, resource: { buffer: groundAccum } },
         { binding: 18, resource: groundCube.createView({ dimension: '2d-array' }) },
         { binding: 19, resource: this.oceanView() },
-        { binding: 20, resource: this.repeatSampler },
+        { binding: 20, resource: this.oceanSampler },
       ],
     });
   }
@@ -544,7 +569,7 @@ export class Renderer {
           { binding: 8, resource: { buffer: this.groundBuffer } },
           { binding: 9, resource: groundCube.createView({ dimension: '2d-array' }) },
           { binding: 10, resource: this.oceanView() },
-          { binding: 11, resource: this.repeatSampler },
+          { binding: 11, resource: this.oceanSampler },
         ],
       }));
       pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));

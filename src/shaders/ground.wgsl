@@ -13,6 +13,7 @@ struct Ground {
   info: vec4f,              // x = terrain on (0/1), y = tile size (km), z = grid side (tiles), w = seed
   relief: vec4f,            // x = highest ground (km, 0 = flat), y = ground height under the eye (km), z = snow line (km)
   waves: vec4f,             // tile size of ocean cascades 0..2 (m), wind over the water (m/s)
+  place: vec4f,             // xy = where the eye stands in terrain space (km): the ground is offset by it
 }
 
 const T_WATER: u32 = 0u;
@@ -54,7 +55,21 @@ fn terrain_texel(q: vec2f) -> vec4f {
 }
 
 // The ground at xz (km, world space: the ground does not drift with the wind).
-fn ground_surface(xz: vec2f) -> Surface {
+// How much of a detail of `feature` km survives a pixel footprint of `footprint` km: 1 while
+// the pixel resolves it, fading to 0 (its average) once several features share a pixel.
+// Without it sub-pixel detail aliases into speckle.
+fn resolved(feature: f32, footprint: f32) -> f32 {
+  return 1.0 - smoothstep(0.5 * feature, 2.0 * feature, footprint);
+}
+
+// Noise n (mean 0.5) over features of `feature` km, faded toward its mean by the footprint.
+fn detail(n: f32, feature: f32, footprint: f32) -> f32 {
+  return mix(0.5, n, resolved(feature, footprint));
+}
+
+// The ground at world_xz (km; the ground does not drift with the wind), seen by a pixel
+// covering `footprint` km of it.
+fn ground_surface(world_xz: vec2f, footprint: f32) -> Surface {
   var s: Surface;
   s.water = 0.0;
   if (ground.info.x < 0.5) {
@@ -62,6 +77,7 @@ fn ground_surface(xz: vec2f) -> Surface {
     return s;
   }
   let tile = ground.info.y;
+  let xz = world_xz + ground.place.xy;
   // Warp the tile grid so boundaries wander like coastlines and field edges, not pixels.
   let warp = vec2f(gfbm(xz / (tile * 0.9), 11u), gfbm(xz / (tile * 0.9), 23u)) - 0.5;
   let q = xz / tile + warp * 0.9;
@@ -75,12 +91,12 @@ fn ground_surface(xz: vec2f) -> Surface {
       s.water = 1.0;
     }
     case T_SAND: {
-      albedo = base * mix(0.85, 1.12, gnoise(xz / 0.03, 31u));
+      albedo = base * mix(0.85, 1.12, detail(gnoise(xz / 0.03, 31u), 0.03, footprint));
     }
     case T_MEADOW: {
       // Broad tonal drifts with a yellower cast where it is drier.
-      let drift = gfbm(xz / 0.35, 41u);
-      albedo = mix(base, base * vec3f(1.35, 1.2, 0.8), drift) * mix(0.85, 1.1, gnoise(xz / 0.02, 42u));
+      let drift = detail(gfbm(xz / 0.35, 41u), 0.35, footprint);
+      albedo = mix(base, base * vec3f(1.35, 1.2, 0.8), drift) * mix(0.85, 1.1, detail(gnoise(xz / 0.02, 42u), 0.02, footprint));
     }
     case T_FIELDS: {
       // Each tile splits into parcels; each parcel is a crop (green, golden, ploughed) with
@@ -89,22 +105,24 @@ fn ground_surface(xz: vec2f) -> Surface {
       let pcell = floor(q * parcels);
       let pr = ghash(vec2i(pcell), 51u);
       var crops = array<vec3f, 4>(vec3f(1.0), vec3f(1.45, 1.25, 0.65), vec3f(0.85, 1.25, 0.75), vec3f(0.95, 0.75, 0.6));
-      let crop = crops[u32(pr * 3.999)];
+      // Far away a pixel spans several parcels: their crops average toward the mean.
+      let crop = mix(vec3f(1.06, 1.06, 0.75), crops[u32(pr * 3.999)], resolved(tile / parcels, footprint));
       let angle = ghash(vec2i(pcell), 52u) * 3.14159;
       let along = dot(xz, vec2f(cos(angle), sin(angle)));
-      let furrows = 0.9 + 0.1 * sin(along / 0.006);
-      // A darker margin between parcels.
+      let furrows = 0.9 + 0.1 * sin(along / 0.006) * resolved(0.04, footprint);
+      // A darker margin between parcels, about 20 m wide; averaged out once a pixel spans it.
       let edge = min(min(fract(q.x * parcels), 1.0 - fract(q.x * parcels)), min(fract(q.y * parcels), 1.0 - fract(q.y * parcels)));
-      let hedge = mix(0.55, 1.0, smoothstep(0.0, 0.04, edge));
-      albedo = base * crop * furrows * hedge * mix(0.9, 1.08, gnoise(xz / 0.05, 53u));
+      let margin = 0.04 * tile / parcels;
+      let hedge = mix(1.0 - 0.45 * 0.08, mix(0.55, 1.0, smoothstep(0.0, 0.04, edge)), resolved(margin, footprint));
+      albedo = base * crop * furrows * hedge * mix(0.9, 1.08, detail(gnoise(xz / 0.05, 53u), 0.05, footprint));
     }
     case T_FOREST: {
       // Crowns and gaps.
-      let crowns = gnoise(xz / 0.012, 61u) * 0.6 + gnoise(xz / 0.004, 62u) * 0.4;
-      albedo = base * mix(0.45, 1.25, crowns) * mix(0.85, 1.15, gfbm(xz / 0.5, 63u));
+      let crowns = detail(gnoise(xz / 0.012, 61u), 0.012, footprint) * 0.6 + detail(gnoise(xz / 0.004, 62u), 0.004, footprint) * 0.4;
+      albedo = base * mix(0.45, 1.25, crowns) * mix(0.85, 1.15, detail(gfbm(xz / 0.5, 63u), 0.5, footprint));
     }
     default: {
-      albedo = base * mix(0.7, 1.3, gfbm(xz / 0.08, 71u));
+      albedo = base * mix(0.7, 1.3, detail(gfbm(xz / 0.08, 71u), 0.08, footprint));
     }
   }
   s.albedo = clamp(albedo, vec3f(0.0), vec3f(1.0));
@@ -115,6 +133,9 @@ fn ground_surface(xz: vec2f) -> Surface {
 // `footprint` metres, and the slope variance the footprint hides, which becomes roughness.
 // Ported in spirit from the ABYSSAL / natural-disasters ocean (MIT): only the waves a pixel
 // resolves bend its normal; the rest widen its highlight (Cox-Munk, LEAN-style).
+const OCEAN_TURNS = array<f32, 3>(0.0, 0.6143, 1.7287);
+const OCEAN_OFFSETS = array<vec2f, 3>(vec2f(0.0), vec2f(0.371, 0.113), vec2f(0.687, 0.529));
+
 struct Water {
   normal: vec3f,
   alpha: f32,   // GGX roughness (alpha = sqrt(2 x mean square slope))
@@ -130,8 +151,12 @@ fn water_surface(xz: vec2f, up: vec3f, footprint: f32) -> Water {
     let tile = ground.waves[c];
     let texel = tile / f32(textureDimensions(ocean_tex).x);
     let lod = clamp(log2(max(footprint / texel, 1.0)), 0.0, f32(textureNumLevels(ocean_tex) - 1));
-    let s = textureSampleLevel(ocean_tex, ocean_sampler, p / tile, c, lod);
-    slope += s.xy;
+    // Each cascade turned to its own angle so their repeats never line up into a grid
+    // (as the ABYSSAL ripple taps do); its slope is turned back before adding.
+    let turn = OCEAN_TURNS[c];
+    let rot = mat2x2f(cos(turn), sin(turn), -sin(turn), cos(turn));
+    let s = textureSampleLevel(ocean_tex, ocean_sampler, (rot * p) / tile + OCEAN_OFFSETS[c], c, lod);
+    slope += transpose(rot) * s.xy;
     hidden += max(s.z - dot(s.xy, s.xy), 0.0);
     fold = min(fold, s.w);
   }

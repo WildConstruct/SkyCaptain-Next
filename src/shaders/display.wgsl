@@ -6,6 +6,7 @@ struct View {
   right: vec4f,    // xyz, w = tan(fov/2) * aspect
   up: vec4f,       // xyz, w = tan(fov/2)
   forward: vec4f,  // xyz, w = exposure (EV)
+  film: vec4f,     // grain amount, softness (blur radius, px), grain seed, unused
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -119,10 +120,37 @@ fn srgb_encode(c: vec3f) -> vec3f {
   return select(1.055 * pow(c, vec3f(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3f(0.0031308));
 }
 
+fn view_dir(ndc: vec2f) -> vec3f {
+  return normalize(view.forward.xyz + ndc.x * view.right.w * view.right.xyz + ndc.y * view.up.w * view.up.xyz);
+}
+
+// Film (preview and clips only; the HDRI export never sees it): softness is a small disc
+// blur in pixels, the way a lens and a scan soften edges; grain is a fine noise floor,
+// strongest in the mid tones, that changes every frame of a clip.
+const SOFT_TAPS: i32 = 6;
+
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
-  let dir = normalize(view.forward.xyz + in.ndc.x * view.right.w * view.right.xyz + in.ndc.y * view.up.w * view.up.xyz);
-  let linear = environment(dir);
+  let pixel = vec2f(length(dpdx(in.ndc)), length(dpdy(in.ndc)));
+  var linear = environment(view_dir(in.ndc));
+  let radius = view.film.y;
+  if (radius > 0.01) {
+    var sum = linear;
+    for (var i = 0; i < SOFT_TAPS; i++) {
+      let a = f32(i) * 2.39996 + 0.5;
+      let r = radius * sqrt((f32(i) + 0.5) / f32(SOFT_TAPS));
+      sum += environment(view_dir(in.ndc + vec2f(cos(a), sin(a)) * r * pixel));
+    }
+    linear = sum / f32(SOFT_TAPS + 1);
+  }
   let exposed = linear * exp2(view.forward.w);
-  return vec4f(srgb_encode(aces_fit(exposed)), 1.0);
+  var shown = srgb_encode(aces_fit(exposed));
+  let grain = view.film.x;
+  if (grain > 0.0) {
+    let cell = vec3u(vec2u(in.position.xy), u32(view.film.z));
+    let n = hash33(cell) + hash33(cell + vec3u(0u, 0u, 7919u)) - 1.0;
+    let luma = dot(shown, vec3f(0.2126, 0.7152, 0.0722));
+    shown += n * grain * (0.35 + 2.6 * luma * (1.0 - luma));
+  }
+  return vec4f(clamp(shown, vec3f(0.0), vec3f(1.0)), 1.0);
 }

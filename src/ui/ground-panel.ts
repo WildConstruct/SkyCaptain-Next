@@ -21,7 +21,7 @@ export class GroundPanel {
   private inputs = new Map<string, { input: HTMLInputElement; value: HTMLElement; unit: string }>();
   private enabled: HTMLInputElement;
 
-  constructor(root: HTMLElement, private store: GroundStore) {
+  constructor(root: HTMLElement, private store: GroundStore, faceBearing?: (degrees: number) => void) {
     const toggleRow = document.createElement('label');
     toggleRow.className = 'check';
     this.enabled = document.createElement('input');
@@ -37,6 +37,16 @@ export class GroundPanel {
     reroll.title = 'Collapse a new layout from the same recipe';
     reroll.onclick = () => { store.setEnabled(true); store.reroll(); };
     actions.append(reroll);
+    if (faceBearing) {
+      const face = document.createElement('button');
+      face.textContent = 'Face the mountains';
+      face.title = 'Turn the view toward the most prominent relief';
+      face.onclick = () => {
+        const bearing = store.reliefBearing();
+        if (bearing !== null) faceBearing(bearing);
+      };
+      actions.append(face);
+    }
     root.append(toggleRow, actions);
 
     const slider = (key: string, label: string, min: number, max: number, step: number, unit: string, hint: string, apply: (v: number) => void) => {

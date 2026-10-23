@@ -516,3 +516,51 @@ export function heightField(map: TerrainMap, recipe: TerrainRecipe, size = HEIGH
   const atOrigin = (soft[0] + soft[size - 1] + soft[(size - 1) * size] + soft[size * size - 1]) / 4;
   return { size, heights: soft, atOrigin };
 }
+
+export interface Standpoint {
+  /** Where the eye stands, km in terrain space (the shaders offset the ground by this). */
+  x: number;
+  z: number;
+  /** Compass bearing of the most prominent range from there, degrees. */
+  bearing: number;
+}
+
+/**
+ * Where to stand to see mountains: low land, near water if there is any, with the highest
+ * ranges 15-80 km away rising as high as possible above the horizon (earth curvature
+ * counted). Flat ground: the origin, facing north.
+ */
+export function standpoint(map: TerrainMap, field: HeightField, recipe: TerrainRecipe): Standpoint {
+  if (recipe.heightKm <= 0) return { x: 0, z: 0, bearing: 0 };
+  const { size, heights } = field;
+  const period = recipe.tileKm * map.size;
+  const at = (x: number, z: number) => {
+    const u = ((x / period) % 1 + 1) % 1;
+    const v = ((z / period) % 1 + 1) % 1;
+    return heights[Math.floor(v * size) * size + Math.floor(u * size)];
+  };
+  const type = (tx: number, ty: number) => map.types[((ty + map.size) % map.size) * map.size + ((tx + map.size) % map.size)];
+  let best = { x: 0, z: 0, bearing: 0, score: -Infinity };
+  for (let ty = 0; ty < map.size; ty += 4) {
+    for (let tx = 0; tx < map.size; tx += 4) {
+      if (type(tx, ty) === 0) continue;
+      const x = (tx + 0.5) * recipe.tileKm;
+      const z = (ty + 0.5) * recipe.tileKm;
+      const h0 = at(x, z);
+      if (h0 > recipe.heightKm * 0.15) continue;
+      let shore = 0;
+      for (let dy = -3; dy <= 3 && !shore; dy++) for (let dx = -3; dx <= 3; dx++) if (type(tx + dx, ty + dy) === 0) { shore = 1; break; }
+      for (let a = 0; a < 360; a += 10) {
+        const r = (a * Math.PI) / 180;
+        let rise = -Infinity;
+        for (let d = 15; d <= 80; d += 2.5) {
+          const h = at(x + Math.sin(r) * d, z + Math.cos(r) * d) - h0 - (d * d) / (2 * 6360);
+          rise = Math.max(rise, Math.atan2(h, d));
+        }
+        const score = rise + shore * 0.01;
+        if (score > best.score) best = { x, z, bearing: a, score };
+      }
+    }
+  }
+  return { x: best.x, z: best.z, bearing: best.bearing };
+}

@@ -53,6 +53,10 @@ export interface Settings {
   /** Scene time, seconds: the waves' clock (animation sets it; a still is time 0). */
   sceneTime: number;
   ev: number;
+  /** Preview and clips only: film grain (noise floor) amount. */
+  grain: number;
+  /** Preview and clips only: analog softness, a blur radius in pixels. */
+  softness: number;
   fov: number;
   yaw: number;
   pitch: number;
@@ -92,6 +96,8 @@ export const DEFAULTS: Settings = {
   eyeAltitude: 0,
   sceneTime: 0,
   ev: 0,
+  grain: 0,
+  softness: 0,
   fov: 80,
   yaw: 20,
   pitch: 18,
@@ -103,7 +109,7 @@ export type Invalidation = 'view' | 'clouds' | 'weather' | 'sky';
 
 const SKY_KEYS: (keyof Settings)[] = ['sunElevation', 'sunAzimuth', 'sunIntensity', 'haze', 'groundAlbedo', 'eyeAltitude'];
 const WEATHER_KEYS: (keyof Settings)[] = ['seed', 'weatherScale', 'baseWeather'];
-const VIEW_KEYS: (keyof Settings)[] = ['ev', 'fov', 'yaw', 'pitch'];
+const VIEW_KEYS: (keyof Settings)[] = ['ev', 'fov', 'yaw', 'pitch', 'grain', 'softness'];
 
 export function invalidationFor(key: keyof Settings): Invalidation {
   if (SKY_KEYS.includes(key)) return 'sky';

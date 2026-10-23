@@ -316,7 +316,12 @@ fn ground_shadow(@builtin(global_invocation_id) id: vec3u) {
 // the height field; mountains then hide the clouds and sky behind them, and get their own
 // air (aerial perspective) up to the hit.
 
-const TERRAIN_STEPS: i32 = 160;
+const TERRAIN_STEPS: i32 = 256;
+// Shortest terrain step (km) and its growth with distance: nothing nearer than ~200 m needs
+// to hold up, and a step of 3% of the distance still reaches 1000 km in the budget.
+const TERRAIN_MIN_STEP_KM: f32 = 0.02;
+const TERRAIN_STEP_GROWTH: f32 = 0.03;
+const TERRAIN_NEAR_SKIP_KM: f32 = 0.03;
 const TERRAIN_BISECTIONS: i32 = 7;
 const TERRAIN_MAX_KM: f32 = 400.0;
 const SELF_SHADOW_STEPS: i32 = 20;
@@ -327,7 +332,7 @@ fn relief_on() -> bool { return ground.info.x > 0.5 && ground.relief.x > 0.0; }
 fn terrain_height(xz: vec2f) -> f32 {
   if (!relief_on()) { return 0.0; }
   let period = ground.info.y * ground.info.z;
-  return textureSampleLevel(height_tex, repeat_sampler, xz / period, 0.0).r;
+  return textureSampleLevel(height_tex, repeat_sampler, (xz + ground.place.xy) / period, 0.0).r;
 }
 
 // Surface normal from the height field's slope, tilted from the local up.
@@ -347,13 +352,17 @@ fn terrain_hit(o: vec3f, dir: vec3f, jitter: f32) -> f32 {
   // Only the slab under the highest ground can hold a hit.
   let slab = ray_sphere(o, dir, r0 + ground.relief.x + 0.005);
   if (slab.y <= 0.0) { return -1.0; }
-  var t = max(slab.x, 0.0);
+  // A rising ray cannot meet anything near enough to matter (shots keep ~200 m clear), and
+  // skipping the first metres keeps it from catching the ground the eye stands on.
+  var t = max(slab.x, select(0.0, TERRAIN_NEAR_SKIP_KM, dot(dir, normalize(o)) > 0.0));
   var t_end = min(slab.y, t + TERRAIN_MAX_KM);
   if (sea > 0.0) { t_end = min(t_end, sea); }
   var prev = t;
   // Steps follow the height above the ground, never shorter than a fraction of the
   // distance (distant ridges are coarse anyway); jittered so the stepping does not band.
-  t += (0.003 + t * 0.012) * jitter;
+  // (Steps that start at metres and grow 1% ran out ~1.5 km away: horizon rays never
+  // reached the mountains.)
+  t += (TERRAIN_MIN_STEP_KM + t * TERRAIN_STEP_GROWTH) * jitter;
   for (var i = 0; i < TERRAIN_STEPS; i++) {
     if (t > t_end) { break; }
     let p = o + dir * t;
@@ -369,7 +378,7 @@ fn terrain_hit(o: vec3f, dir: vec3f, jitter: f32) -> f32 {
       return b;
     }
     prev = t;
-    t += max(gap * 0.5, 0.003 + t * 0.012);
+    t += max(gap * 0.5, TERRAIN_MIN_STEP_KM + t * TERRAIN_STEP_GROWTH);
   }
   // Past the relief the ray can still meet the sea.
   return select(-1.0, sea, sea > 0.0 && t >= sea);
@@ -449,19 +458,27 @@ fn ground_radiance(o: vec3f, dir: vec3f, t_ground: f32, jitter: vec3f) -> Ground
   let sun = params.sun_dir.xyz;
   let illum = params.sun_color.rgb * params.sun_dir.w;
 
-  let surface = ground_surface(g.xz);
+  // A cube texel's footprint on the ground, km (stretched at grazing angles, taken as the
+  // equal-area width as for water).
+  let footprint = t_ground * texel_angle() / sqrt(max(abs(dot(dir, n)), 0.01));
+  let surface = ground_surface(g.xz, footprint);
   let albedo = layered_albedo(surface, g.xz, height, slope);
   let cos_sun = dot(n, sun);
   var direct = vec3f(0.0);
   var sun_at_ground = vec3f(0.0);
   if ((cos_sun > 0.0 || surface.water > 0.0) && dot(up, sun) > -0.05) {
-    var shadow = textureSampleLevel(shadow_tex, clamp_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0).r;
-    // skyCaptain: the shadow map is sea-level ground near the eye; elsewhere (far ground,
-    // or relief, which lifts the ground into the clouds) march the cloud shadow directly.
-    if (any(abs(g.xz) > vec2f(GROUND_SHADOW_KM * 0.5)) || relief_on()) {
+    // skyCaptain: the shadow map holds the sun's transmittance through the clouds from
+    // sea-level ground near the eye. Raised ground below the clouds lies on the sun ray of
+    // the sea-level point it shades, so read the map there; that stays smooth where
+    // marching per sample would speckle. Far ground, or ground up in the clouds, marches.
+    let lift = max(height, 0.0);
+    let source = g.xz - sun.xz / max(sun.y, 0.05) * lift;
+    var shadow = textureSampleLevel(shadow_tex, clamp_sampler, source / GROUND_SHADOW_KM + 0.5, 0.0).r;
+    if (any(abs(source) > vec2f(GROUND_SHADOW_KM * 0.5)) || height > cloud_bottom()) {
       shadow = exp(-layer_optical_depth(g, sun, DISTANT_SHADOW_STEPS, jitter.x));
     }
-    shadow *= terrain_shadow(g, sun, jitter.z);
+    // A fixed step offset: jittered, the ridge shadow speckled at low sample counts.
+    shadow *= terrain_shadow(g, sun, 0.5);
     sun_at_ground = illum * transmittance_lut_at(length(g), max(dot(up, sun), 0.0)) * shadow;
     direct = sun_at_ground * max(cos_sun, 0.0);
   }

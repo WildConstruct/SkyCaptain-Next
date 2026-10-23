@@ -2,6 +2,7 @@
 // real speed and gently sped up. Each is every frame at 24 fps, converged at the Ultra
 // tier with 2048 px cube faces, through tools/clip-preview.mjs. Needs the dev server (npm run dev) and ffmpeg.
 // Usage: SKY_GPU=1 node tools/render-studies.mjs [--only name,name] [--seconds 20] [--width 1920] [--face 2048]
+//        [--grain 0.015] [--softness 0.6]   (film look, preview and clips only; 0 turns it off)
 // Writes shots/studies/<name>.mp4 and shots/studies/<name>.json (the recipe used).
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -45,7 +46,7 @@ const STUDIES = [
   },
   {
     name: 'lake-mountains-1x', hint: 'A lake under a mountain range at real speed, long lens, from the shore',
-    sky: { terrain: 1, terrainWater: 0.4, terrainHeight: 2.5, terrainRidges: 0.8, pitch: 2, fov: 30, sunElevation: 12, sunAzimuth: 150 }, anim: { timeLapse: 1 },
+    sky: { terrain: 1, terrainWater: 0.4, terrainHeight: 2.5, terrainRidges: 0.8, pitch: 2, fov: 30, sunElevation: 12, sunAzimuth: 100, aimRelief: 1 }, anim: { timeLapse: 1 },
   },
 ];
 
@@ -53,7 +54,7 @@ mkdirSync('shots/studies', { recursive: true });
 for (const study of STUDIES) {
   if (only.length && !only.includes(study.name)) continue;
   // 2048 px cube faces: a 1920 px wide, 80 degree view needs ~24 px per degree.
-  const query = new URLSearchParams({ quality: 'ultra', face: arg('face', '2048'), ...Object.fromEntries(Object.entries(study.sky).map(([k, v]) => [k, String(v)])) }).toString();
+  const query = new URLSearchParams({ quality: 'ultra', face: arg('face', '2048'), grain: arg('grain', '0.015'), softness: arg('softness', '0.6'), ...Object.fromEntries(Object.entries(study.sky).map(([k, v]) => [k, String(v)])) }).toString();
   const anim = { duration: seconds, fps: 24, ...wind, ...study.anim };
   const out = `shots/studies/${study.name}.mp4`;
   writeFileSync(`shots/studies/${study.name}.json`, JSON.stringify({ ...study, query, animation: anim }, null, 2));

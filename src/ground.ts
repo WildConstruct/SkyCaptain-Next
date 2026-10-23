@@ -2,7 +2,7 @@
 // collapse to. Every change recollapses (about 50 ms) and notifies subscribers; main.ts
 // hands the result to the renderer.
 
-import { DEFAULT_TERRAIN, HeightField, TERRAIN_GRID, TerrainMap, TerrainRecipe, generateTerrain, heightField, parseTerrain } from './terrain';
+import { DEFAULT_TERRAIN, HeightField, Standpoint, TERRAIN_GRID, TerrainMap, TerrainRecipe, generateTerrain, heightField, parseTerrain, standpoint } from './terrain';
 
 export class GroundStore {
   enabled = false;
@@ -12,11 +12,14 @@ export class GroundStore {
   map: TerrainMap;
   /** Relief over the same period (flat when the recipe's height is 0). */
   height: HeightField;
+  /** Where the eye stands on relief (the origin on flat ground). */
+  place: Standpoint;
   private listeners = new Set<() => void>();
 
   constructor() {
     this.map = generateTerrain(this.recipe, this.constraints);
     this.height = heightField(this.map, this.recipe);
+    this.place = standpoint(this.map, this.height, this.recipe);
   }
 
   subscribe(fn: () => void): () => void {
@@ -28,6 +31,7 @@ export class GroundStore {
     if (regenerate) {
       this.map = generateTerrain(this.recipe, this.constraints);
       this.height = heightField(this.map, this.recipe);
+      this.place = standpoint(this.map, this.height, this.recipe);
     }
     for (const fn of this.listeners) fn();
   }
@@ -41,6 +45,11 @@ export class GroundStore {
   update(changes: Partial<TerrainRecipe>): void {
     this.recipe = parseTerrain({ ...this.recipe, ...changes });
     this.changed(true);
+  }
+
+  /** Compass bearing (degrees) of the most prominent range from where the eye stands, or null on flat ground. */
+  reliefBearing(): number | null {
+    return this.enabled && this.recipe.heightKm > 0 ? this.place.bearing : null;
   }
 
   /** A new layout from the same recipe. */

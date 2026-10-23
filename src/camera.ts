@@ -29,7 +29,8 @@ export function basis(s: Settings): Basis {
 
 export function viewUniforms(s: Settings, aspect: number): Float32Array<ArrayBuffer> {
   const b = basis(s);
-  return new Float32Array([...b.right, b.tanHalf * aspect, ...b.up, b.tanHalf, ...b.forward, s.ev]);
+  // Film: grain, softness, and a seed that changes with scene time so grain moves in clips.
+  return new Float32Array([...b.right, b.tanHalf * aspect, ...b.up, b.tanHalf, ...b.forward, s.ev, s.grain, s.softness, Math.round(s.sceneTime * 24), 0]);
 }
 
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];

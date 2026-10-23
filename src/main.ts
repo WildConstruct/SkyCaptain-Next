@@ -93,6 +93,8 @@ const GROUPS: { title: string; expert?: boolean; sliders: SliderSpec[] }[] = [
     sliders: [
       { key: 'ev', label: 'Exposure', min: -8, max: 8, step: 0.05, unit: 'EV' },
       { key: 'fov', label: 'Field of view', min: 20, max: 120, step: 1, unit: '°' },
+      { key: 'softness', label: 'Softness', min: 0, max: 3, step: 0.05, unit: 'px' },
+      { key: 'grain', label: 'Grain', min: 0, max: 0.08, step: 0.002 },
     ],
   },
 ];
@@ -176,7 +178,7 @@ async function main(): Promise<void> {
   // terrainWater, terrainRelief, terrainPatch, terrainTile, terrainHeight, terrainRidges and
   // terrainSnow.
   const ground = new GroundStore();
-  ground.subscribe(() => renderer.setTerrain(ground.enabled ? { map: ground.map, recipe: ground.recipe, height: ground.height } : null));
+  ground.subscribe(() => renderer.setTerrain(ground.enabled ? { map: ground.map, recipe: ground.recipe, height: ground.height, place: ground.place } : null));
   if (query.get('terrain') === '1') {
     const num = (key: string) => (query.get(key) === null ? undefined : Number(query.get(key)));
     const changes = Object.fromEntries(Object.entries({
@@ -344,7 +346,12 @@ async function main(): Promise<void> {
   groundSummary.textContent = 'Ground';
   const groundRoot = document.createElement('div');
   groundSection.append(groundSummary, groundRoot);
-  new GroundPanel(groundRoot, ground);
+  new GroundPanel(groundRoot, ground, (bearing) => set('yaw', bearing));
+  // ?aimRelief=1 (tools/): face the most prominent relief.
+  if (query.get('aimRelief') === '1') {
+    const bearing = ground.reliefBearing();
+    if (bearing !== null) set('yaw', bearing);
+  }
   // A ground graph rolls terrain only (ground.* variables), independently of the sky graph.
   const groundGraph = new SkyGraph(settings, store, set, ground, true);
   const groundGraphRoot = document.createElement('div');
