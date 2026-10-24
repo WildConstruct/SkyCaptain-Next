@@ -6,6 +6,30 @@
 // r = sun through the clouds, g = sun past the relief, over GROUND_SHADOW_KM at sea level).
 
 const WATER_TAPS: i32 = 8;
+// Glitter: the sun reflects off individual capillary facets about this big (m^2).
+const FACET_M2: f32 = 4e-4;
+// Sparkles re-draw this many times a second as the facets turn (shutter sub-frames see
+// different ones, so motion blur averages the twinkle as film does).
+const SPARKLE_RATE: f32 = 120.0;
+
+// A Poisson count with mean lambda from two uniforms: exact by inversion for small means,
+// the normal approximation for large ones.
+fn poisson(lambda: f32, u: vec2f) -> f32 {
+  if (lambda > 30.0) {
+    let gauss = sqrt(-2.0 * log(max(u.x, 1e-7))) * cos(6.2831853 * u.y);
+    return max(0.0, round(lambda + sqrt(lambda) * gauss));
+  }
+  var p = exp(-lambda);
+  var cdf = p;
+  var k = 0.0;
+  for (var i = 0; i < 64; i++) {
+    if (u.x <= cdf) { break; }
+    k += 1.0;
+    p *= lambda / k;
+    cdf += p;
+  }
+  return k;
+}
 
 // Sky and cloud light on the ground (the direct sun on land is already in the cloud cube):
 // the downwelling irradiance integrated from the finished cube, times what the cloud pass
@@ -32,6 +56,9 @@ fn ground_ambient(dir: vec3f, pixel: f32) -> vec3f {
   // Never finer than a quarter of a cube texel: the cloud pass shaded the body at that.
   let angle = max(pixel, 0.125 * PI / params.march.z);
   let footprint = t * 1000.0 * angle / sqrt(max(abs(dot(dir, up)), 0.01));
+  // The water one output pixel covers, m^2 (for counting glitter facets).
+  let pixel_m = t * 1000.0 * max(pixel, 1e-6);
+  let pixel_area = pixel_m * pixel_m / max(abs(dot(dir, up)), 0.01);
   let w = water_surface(g.xz, up, footprint);
   let n = w.normal;
   let v = -dir;
@@ -76,7 +103,20 @@ fn ground_ambient(dir: vec3f, pixel: f32) -> vec3f {
     let widen = (w.alpha * w.alpha) / (disc * disc);
     let fs = 0.02 + 0.98 * pow(1.0 - max(dot(v, h), 1e-4), 5.0);
     if (nol > 0.0) {
-      water += near * (1.0 - w.foam) * sun_at_water * ggx_d(max(dot(n, h), 0.0), disc) * smith_vis(nov, nol, w.alpha) * fs * nol * widen;
+      let noh = max(dot(n, h), 0.0);
+      let glint = near * (1.0 - w.foam) * sun_at_water * ggx_d(noh, disc) * smith_vis(nov, nol, w.alpha) * fs * nol * widen;
+      // Glitter: the glint is the mean over the pixel's facets; draw how many of them catch
+      // the sun disc right now (a facet does when its normal lies in the sun's cone of half
+      // vectors), so near water sparkles and far water, with millions of facets, is smooth.
+      let sun_cone = 2.0 * PI * (1.0 - cos(params.sun_color.w));
+      let p_facet = clamp(ggx_d(noh, w.alpha) * noh * sun_cone / (4.0 * max(dot(v, h), 1e-3)), 0.0, 1.0);
+      let lambda = pixel_area / FACET_M2 * p_facet;
+      var sparkle = 1.0;
+      if (lambda < 1e4) {
+        let cell = vec3u(bitcast<u32>(dir.x), bitcast<u32>(dir.y) ^ (bitcast<u32>(dir.z) * 747796405u), u32(ground.gusts.w * SPARKLE_RATE));
+        sparkle = poisson(lambda, hash33(cell).xy) / max(lambda, 1e-3);
+      }
+      water += glint * min(sparkle, 1e3);
     }
   }
   return light + water * air * seen.a;

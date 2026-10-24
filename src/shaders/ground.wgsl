@@ -14,7 +14,7 @@ struct Ground {
   relief: vec4f,            // x = highest ground (km, 0 = flat), y = ground height under the eye (km), z = snow line (km)
   waves: vec4f,             // tile size of ocean cascades 0..2 (m), wind over the water (m/s)
   place: vec4f,             // xy = where the eye stands in terrain space (km): the ground is offset by it
-  gusts: vec4f,             // xy = wind direction over the water (x east, z north), z = gust drift downwind (km)
+  gusts: vec4f,             // xy = wind direction over the water (x east, z north), z = gust drift downwind (km), w = scene time (s)
 }
 
 const T_WATER: u32 = 0u;

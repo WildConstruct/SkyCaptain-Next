@@ -84,5 +84,6 @@ fn view_dir(ndc: vec2f) -> vec3f {
 fn fs(in: VsOut) -> @location(0) vec4f {
   // The angle one pixel spans, for resolving water per pixel (composite.wgsl).
   let pixel = length(dpdy(in.ndc)) * view.up.w;
-  return vec4f(environment(view_dir(in.ndc), pixel) * exp2(view.forward.w), 1.0);
+  // Held inside half-float range: a single glitter facet can be brighter than that.
+  return vec4f(min(environment(view_dir(in.ndc), pixel) * exp2(view.forward.w), vec3f(6e4)), 1.0);
 }

@@ -317,7 +317,7 @@ export class Renderer {
       // Gusts: the wind's direction over the water (x east, z north); the drift is written
       // with the waves, as it follows the scene time.
       const heading = (recipe.waveHeadingDeg * Math.PI) / 180;
-      data.set([Math.sin(heading), Math.cos(heading), this.gustDrift(), 0], 40);
+      data.set([Math.sin(heading), Math.cos(heading), this.gustDrift(), this.settings.sceneTime], 40);
       data.set([1, recipe.tileKm, map.size, recipe.seed % 100000], 24);
     }
     this.device.queue.writeBuffer(this.groundBuffer, 0, data);
@@ -378,7 +378,7 @@ export class Renderer {
     const o = this.ocean;
     const n = OCEAN_N;
     this.device.queue.writeBuffer(o.params, 0, packOcean(this.waves, time));
-    this.device.queue.writeBuffer(this.groundBuffer, 42 * 4, new Float32Array([this.gustDrift(time)]));
+    this.device.queue.writeBuffer(this.groundBuffer, 42 * 4, new Float32Array([this.gustDrift(time), time]));
     const pass = encoder.beginComputePass({ label: 'ocean' });
     pass.setPipeline(o.spectrum);
     pass.setBindGroup(0, o.groups.spectrum);
