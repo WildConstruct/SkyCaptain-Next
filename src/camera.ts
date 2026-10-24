@@ -27,10 +27,36 @@ export function basis(s: Settings): Basis {
   return { right: r, up: u, forward: f, tanHalf: Math.tan((s.fov * Math.PI) / 360) };
 }
 
+/** Sensor width the lens is computed for: Super 35, mm. */
+export const SENSOR_WIDTH_MM = 24.89;
+
+/** Focal length, mm, that gives this horizontal field of view on the sensor. */
+export function focalLengthMm(s: Settings, aspect: number): number {
+  return SENSOR_WIDTH_MM / 2 / (basis(s).tanHalf * aspect);
+}
+
+/**
+ * Blur radius, as a fraction of the image width, of a scene far behind the focus: the
+ * circle of confusion f^2 / (N (s - f)) on the sensor. The whole scene is at least a couple
+ * of hundred metres away, so its depth barely changes this (post.wgsl).
+ */
+export function blurRadius(s: Settings, aspect: number): number {
+  if (!(s.focusM > 0)) return 0;
+  const f = focalLengthMm(s, aspect);
+  const focus = Math.max(s.focusM * 1000, f * 1.05);
+  const coc = (f * f) / (Math.max(s.fStop, 0.5) * (focus - f));
+  return Math.min(coc / 2 / SENSOR_WIDTH_MM, 0.05);
+}
+
 export function viewUniforms(s: Settings, aspect: number): Float32Array<ArrayBuffer> {
   const b = basis(s);
-  // Film: grain, softness, and a seed that changes with scene time so grain moves in clips.
-  return new Float32Array([...b.right, b.tanHalf * aspect, ...b.up, b.tanHalf, ...b.forward, s.ev, s.grain, s.softness, Math.round(s.sceneTime * 24), 0]);
+  return new Float32Array([
+    ...b.right, b.tanHalf * aspect, ...b.up, b.tanHalf, ...b.forward, s.ev,
+    // Film: grain, softness, and a seed that changes with scene time so grain moves in clips.
+    s.grain, s.softness, Math.round(s.sceneTime * 24), 0,
+    blurRadius(s, aspect), s.aberration, s.vignette, 0,
+    s.bloom, s.halation, 0, 0,
+  ]);
 }
 
 const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];

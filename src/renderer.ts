@@ -9,6 +9,7 @@ import atmosphereWgsl from './shaders/atmosphere.wgsl?raw';
 import cloudsWgsl from './shaders/clouds.wgsl?raw';
 import downwellingWgsl from './shaders/downwelling.wgsl?raw';
 import displayWgsl from './shaders/display.wgsl?raw';
+import postWgsl from './shaders/post.wgsl?raw';
 import exportWgsl from './shaders/export.wgsl?raw';
 import { Invalidation, QUALITY, Quality, Settings, packParams } from './settings';
 import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
@@ -100,6 +101,12 @@ export class Renderer {
   private cloudPipeline: GPUComputePipeline;
   private referencePipeline: GPUComputePipeline;
   private displayPipeline: GPURenderPipeline;
+  /** The camera (post.wgsl): mip downsampling of the exposed scene, then lens, glow and film. */
+  private downPipeline: GPURenderPipeline;
+  private postPipeline: GPURenderPipeline;
+  private postSampler: GPUSampler;
+  /** Scene targets per output size (the canvas and a capture size can alternate). */
+  private postTargets = new Map<string, PostTarget>();
   private exportPipeline: GPUComputePipeline;
   private downwellingPipeline: GPUComputePipeline;
   private shadowPipeline: GPUComputePipeline;
@@ -156,7 +163,7 @@ export class Renderer {
     this.context?.configure({ device, format: this.format, alphaMode: 'opaque' });
 
     this.paramsBuffer = device.createBuffer({ size: PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.viewBuffer = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.viewBuffer = device.createBuffer({ size: VIEW_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.repeatSampler = device.createSampler({
       magFilter: 'linear', minFilter: 'linear',
       addressModeU: 'repeat', addressModeV: 'repeat', addressModeW: 'repeat',
@@ -209,9 +216,23 @@ export class Renderer {
     this.displayPipeline = device.createRenderPipeline({
       layout: 'auto',
       vertex: { module: displayModule, entryPoint: 'vs' },
-      fragment: { module: displayModule, entryPoint: 'fs', targets: [{ format: this.format }] },
+      fragment: { module: displayModule, entryPoint: 'fs', targets: [{ format: SCENE_FORMAT }] },
       primitive: { topology: 'triangle-list' },
     });
+    const postModule = module(postWgsl, 'post');
+    this.downPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module: postModule, entryPoint: 'vs' },
+      fragment: { module: postModule, entryPoint: 'fs_down', targets: [{ format: SCENE_FORMAT }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    this.postPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module: postModule, entryPoint: 'vs' },
+      fragment: { module: postModule, entryPoint: 'fs', targets: [{ format: this.format }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    this.postSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' });
 
     this.bakeNoise(noiseModule);
     this.allocateCloudTargets();
@@ -793,13 +814,51 @@ export class Renderer {
   }
 
   private drawView(encoder: GPUCommandEncoder, target: GPUTexture): void {
-    const display = encoder.beginRenderPass({
-      colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+    const post = this.postTarget(target.width, target.height);
+    const pass = (view: GPUTextureView, pipeline: GPURenderPipeline, group: GPUBindGroup) => {
+      const p = encoder.beginRenderPass({
+        colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+      });
+      p.setPipeline(pipeline);
+      p.setBindGroup(0, group);
+      p.draw(3);
+      p.end();
+    };
+    pass(post.levels[0], this.displayPipeline, this.displayBindGroup);
+    for (let i = 1; i < post.levels.length; i++) pass(post.levels[i], this.downPipeline, post.down[i - 1]);
+    pass(target.createView(), this.postPipeline, post.group);
+  }
+
+  /** The exposed scene at an output size, with its mip chain and the camera's bind groups. */
+  private postTarget(width: number, height: number): PostTarget {
+    const key = `${width}x${height}`;
+    const cached = this.postTargets.get(key);
+    if (cached) return cached;
+    if (this.postTargets.size >= 2) {
+      for (const t of this.postTargets.values()) t.texture.destroy();
+      this.postTargets.clear();
+    }
+    const count = Math.max(1, Math.min(POST_LEVELS, Math.floor(Math.log2(Math.max(1, Math.min(width, height)))) - 1));
+    const texture = this.device.createTexture({
+      size: [width, height], format: SCENE_FORMAT, mipLevelCount: count,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
     });
-    display.setPipeline(this.displayPipeline);
-    display.setBindGroup(0, this.displayBindGroup);
-    display.draw(3);
-    display.end();
+    const levels = Array.from({ length: count }, (_, i) => texture.createView({ baseMipLevel: i, mipLevelCount: 1 }));
+    const down = levels.slice(0, -1).map((source) => this.device.createBindGroup({
+      layout: this.downPipeline.getBindGroupLayout(0),
+      entries: [{ binding: 1, resource: source }, { binding: 2, resource: this.postSampler }],
+    }));
+    const group = this.device.createBindGroup({
+      layout: this.postPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.viewBuffer } },
+        { binding: 1, resource: texture.createView() },
+        { binding: 2, resource: this.postSampler },
+      ],
+    });
+    const target = { texture, levels, down, group };
+    this.postTargets.set(key, target);
+    return target;
   }
 
   // Renders the preview view offscreen and returns RGBA8 pixels (display-encoded, preview only).
@@ -875,6 +934,20 @@ export class Renderer {
   async idle(): Promise<void> {
     await this.device.queue.onSubmittedWorkDone();
   }
+}
+
+/** The exposed scene before the camera: scene-linear, so highlights keep their energy for bokeh and glow. */
+const SCENE_FORMAT: GPUTextureFormat = 'rgba16float';
+/** Mip levels of the scene for the camera's blurs (level 6 is 1/64 size). */
+const POST_LEVELS = 7;
+/** View uniform (display.wgsl / post.wgsl View): six vec4s. */
+const VIEW_BYTES = 96;
+
+interface PostTarget {
+  texture: GPUTexture;
+  levels: GPUTextureView[];
+  down: GPUBindGroup[];
+  group: GPUBindGroup;
 }
 
 function halfToFloat(h: number): number {

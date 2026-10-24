@@ -13,8 +13,9 @@ separate tool. Do not build hero-cloud or fly-through features here.
   preview and the HDRI export use the same buffer, so they match by construction.
 - **Universal hardware.** Budgets target an M1-class GPU. Faster GPUs converge
   sooner or use a higher quality tier; nothing should require a desktop card.
-- **Scene-linear.** Radiance stays linear end to end. Exposure, tone mapping and
-  sRGB encoding exist only in `display.wgsl` and are labelled preview-only.
+- **Scene-linear.** Radiance stays linear end to end. Exposure, the camera
+  (lens blur, glow, vignette, grain), tone mapping and sRGB encoding exist only in
+  `display.wgsl` and `post.wgsl` and are labelled preview-only.
 - **The weather map is the authoring surface.** Paint layers, shape layers and
   randomization all resolve into the weather map; the renderer only reads it.
 - **Bake, don't compute.** Noise volumes are baked once. Never evaluate procedural

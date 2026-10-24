@@ -57,6 +57,18 @@ export interface Settings {
   grain: number;
   /** Preview and clips only: analog softness, a blur radius in pixels. */
   softness: number;
+  /** Preview and clips only: lens focus distance, m (0 = infinity: the scene in focus). */
+  focusM: number;
+  /** Preview and clips only: lens aperture, f-number. */
+  fStop: number;
+  /** Preview and clips only: veiling glare around bright light, 0..1. */
+  bloom: number;
+  /** Preview and clips only: film halation, a warm halo on highlights, 0..1. */
+  halation: number;
+  /** Preview and clips only: natural lens vignetting (cos^4), 0..1. */
+  vignette: number;
+  /** Preview and clips only: lateral chromatic aberration (fractional colour scale). */
+  aberration: number;
   fov: number;
   yaw: number;
   pitch: number;
@@ -98,6 +110,12 @@ export const DEFAULTS: Settings = {
   ev: 0,
   grain: 0,
   softness: 0,
+  focusM: 0,
+  fStop: 2.8,
+  bloom: 0,
+  halation: 0,
+  vignette: 0,
+  aberration: 0,
   fov: 80,
   yaw: 20,
   pitch: 18,
@@ -109,7 +127,7 @@ export type Invalidation = 'view' | 'clouds' | 'weather' | 'sky';
 
 const SKY_KEYS: (keyof Settings)[] = ['sunElevation', 'sunAzimuth', 'sunIntensity', 'haze', 'groundAlbedo', 'eyeAltitude'];
 const WEATHER_KEYS: (keyof Settings)[] = ['seed', 'weatherScale', 'baseWeather'];
-const VIEW_KEYS: (keyof Settings)[] = ['ev', 'fov', 'yaw', 'pitch', 'grain', 'softness'];
+const VIEW_KEYS: (keyof Settings)[] = ['ev', 'fov', 'yaw', 'pitch', 'grain', 'softness', 'focusM', 'fStop', 'bloom', 'halation', 'vignette', 'aberration'];
 
 export function invalidationFor(key: keyof Settings): Invalidation {
   if (SKY_KEYS.includes(key)) return 'sky';

@@ -97,6 +97,17 @@ const GROUPS: { title: string; expert?: boolean; sliders: SliderSpec[] }[] = [
       { key: 'grain', label: 'Grain', min: 0, max: 0.08, step: 0.002 },
     ],
   },
+  {
+    title: 'Camera (preview only)',
+    sliders: [
+      { key: 'focusM', label: 'Focus (0 = infinity)', min: 0, max: 50, step: 0.1, unit: 'm' },
+      { key: 'fStop', label: 'Aperture', min: 1.2, max: 16, step: 0.1, unit: 'f/' },
+      { key: 'bloom', label: 'Bloom', min: 0, max: 0.3, step: 0.005 },
+      { key: 'halation', label: 'Halation', min: 0, max: 0.3, step: 0.005 },
+      { key: 'vignette', label: 'Vignette', min: 0, max: 1, step: 0.01 },
+      { key: 'aberration', label: 'Chromatic aberration', min: 0, max: 0.004, step: 0.0001 },
+    ],
+  },
 ];
 
 function readUrlOverrides(base: Settings, query: URLSearchParams): Settings {
