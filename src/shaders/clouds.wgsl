@@ -292,7 +292,6 @@ fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
 // The eye is 2 m up, so the visible ground ends at the horizon about 5 km away: the shadow
 // map covers 12 km around the eye (512 texels, ~23 m each), marched once per change with
 // many steps instead of per ground sample. Smooth, and cheap per frame.
-const GROUND_SHADOW_KM: f32 = 12.0;
 const GROUND_SHADOW_STEPS: i32 = 96;
 const DISTANT_SHADOW_STEPS: i32 = 24;
 const OVERHEAD_STEPS: i32 = 12;
@@ -333,8 +332,13 @@ fn ground_shadow(@builtin(global_invocation_id) id: vec3u) {
   let g = ground_point(xz);
   let sun = params.sun_dir.xyz;
   var shadow = 0.0;
-  if (dot(normalize(g), sun) > 0.0) { shadow = exp(-layer_optical_depth(g, sun, GROUND_SHADOW_STEPS, 0.5)); }
-  textureStore(shadow_out, id.xy, vec4f(shadow, 0.0, 0.0, 1.0));
+  var past_relief = 1.0;
+  if (dot(normalize(g), sun) > 0.0) {
+    shadow = exp(-layer_optical_depth(g, sun, GROUND_SHADOW_STEPS, 0.5));
+    // The relief's shadow on sea-level ground (for water glints in the composite).
+    if (relief_on() && terrain_height(xz) <= 0.0) { past_relief = terrain_shadow(g, sun, 0.5); }
+  }
+  textureStore(shadow_out, id.xy, vec4f(shadow, past_relief, 0.0, 1.0));
 }
 
 // ---- Relief -------------------------------------------------------------------------
@@ -560,7 +564,8 @@ fn water_radiance(g: vec3f, up: vec3f, dir: vec3f, t: f32, sun: vec3f, sun_at_gr
     let disc = clamp(w.alpha + params.sun_color.w * 0.5, 0.0, 1.0);
     let widen = (w.alpha * w.alpha) / (disc * disc);
     let fs = 0.02 + 0.98 * pow(1.0 - max(dot(v, h), 1e-4), 5.0);
-    spec = sun_at_ground * ggx_d(max(dot(w.normal, h), 0.0), disc) * smith_vis(nov, nol, w.alpha) * fs * nol * widen;
+    // Near the eye the composite draws the glint per pixel instead (composite.wgsl).
+    spec = (1.0 - near_glint(g.xz)) * sun_at_ground * ggx_d(max(dot(w.normal, h), 0.0), disc) * smith_vis(nov, nol, w.alpha) * fs * nol * widen;
   }
   // Sky light under the surface, E / pi: the zenith and the horizon band.
   let sky_top = textureSampleLevel(sky_tex, clamp_sampler, vec3f(0.0, 1.0, 0.0), 0.0).rgb;

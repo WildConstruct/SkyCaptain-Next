@@ -10,6 +10,7 @@ import cloudsWgsl from './shaders/clouds.wgsl?raw';
 import downwellingWgsl from './shaders/downwelling.wgsl?raw';
 import displayWgsl from './shaders/display.wgsl?raw';
 import postWgsl from './shaders/post.wgsl?raw';
+import compositeWgsl from './shaders/composite.wgsl?raw';
 import exportWgsl from './shaders/export.wgsl?raw';
 import { Invalidation, QUALITY, Quality, Settings, packParams } from './settings';
 import { SHAPES_BUFFER_SIZE, ShapeLayer, packShapes } from './shapes';
@@ -196,7 +197,7 @@ export class Renderer {
     const weatherModule = module(noiseWgsl + '\n' + weatherWgsl, 'weather');
     const atmosphereModule = module(atmosphereWgsl, 'atmosphere');
     const cloudModule = module(groundWgsl + '\n' + cloudsWgsl, 'clouds');
-    const displayModule = module(groundWgsl + '\n' + displayWgsl, 'display');
+    const displayModule = module(groundWgsl + '\n' + compositeWgsl + '\n' + displayWgsl, 'display');
 
     const compute = (m: GPUShaderModule, entryPoint: string) =>
       device.createComputePipeline({ layout: 'auto', compute: { module: m, entryPoint } });
@@ -207,7 +208,7 @@ export class Renderer {
     this.skyPipeline = compute(atmosphereModule, 'sky_cube');
     this.cloudPipeline = compute(cloudModule, 'render');
     this.referencePipeline = compute(cloudModule, 'render_reference');
-    this.exportPipeline = compute(module(groundWgsl + '\n' + exportWgsl, 'export'), 'composite');
+    this.exportPipeline = compute(module(groundWgsl + '\n' + compositeWgsl + '\n' + exportWgsl, 'export'), 'composite');
     this.downwellingPipeline = compute(module(downwellingWgsl, 'downwelling'), 'integrate');
     this.shadowPipeline = compute(cloudModule, 'ground_shadow');
     this.createOcean(module(oceanWgsl, 'ocean'), compute);
@@ -465,6 +466,7 @@ export class Renderer {
         { binding: 9, resource: this.groundCube.createView({ dimension: 'cube' }) },
         { binding: 10, resource: this.oceanView() },
         { binding: 11, resource: this.oceanSampler },
+        { binding: 12, resource: this.shadowTex.createView() },
       ],
     });
   }
@@ -591,6 +593,7 @@ export class Renderer {
           { binding: 9, resource: groundCube.createView({ dimension: '2d-array' }) },
           { binding: 10, resource: this.oceanView() },
           { binding: 11, resource: this.oceanSampler },
+          { binding: 12, resource: this.shadowTex.createView() },
         ],
       }));
       pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
@@ -664,6 +667,8 @@ export class Renderer {
         { binding: 4, resource: this.detailTex.createView() },
         { binding: 5, resource: this.weatherTex.createView() },
         { binding: 11, resource: this.shadowTex.createView() },
+        { binding: 15, resource: { buffer: this.groundBuffer } },
+        { binding: 16, resource: this.heightTex.createView() },
       ],
     }));
     pass.dispatchWorkgroups(512 / 8, 512 / 8);

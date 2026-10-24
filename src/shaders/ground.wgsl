@@ -191,3 +191,16 @@ fn smith_vis(nov: f32, nol: f32, a: f32) -> f32 {
 fn water_fresnel(cos_theta: f32) -> f32 {
   return 0.02 + 0.98 * pow(1.0 - clamp(cos_theta, 0.0, 1.0), 5.0);
 }
+
+// Side of the cloud pass's ground shadow map, km, centred under the eye (clouds.wgsl
+// ground_shadow): r = sun through the clouds, g = sun past the relief, at sea level.
+const GROUND_SHADOW_KM: f32 = 12.0;
+
+// How much of the water's sun glint the composite draws at xz (km): all of it well inside
+// the ground shadow map, which it needs for the clouds' and the relief's shadows, so the
+// glint is resolved per output pixel near the eye; the cloud pass draws the rest, farther
+// out (clouds.wgsl water_radiance).
+fn near_glint(xz: vec2f) -> f32 {
+  let r = max(abs(xz.x), abs(xz.y));
+  return 1.0 - smoothstep(GROUND_SHADOW_KM * 0.38, GROUND_SHADOW_KM * 0.48, r);
+}
