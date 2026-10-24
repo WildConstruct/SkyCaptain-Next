@@ -115,6 +115,9 @@ export class Renderer {
   private shadowPipeline: GPUComputePipeline;
   /** Cloud shadows on the ground around the eye (clouds.wgsl ground_shadow). */
   private shadowTex: GPUTexture;
+  /** Cloud column map (clouds.wgsl cloud_column): optical depth above three layer heights. */
+  private columnTex: GPUTexture;
+  private columnPipeline: GPUComputePipeline;
   /** Downwelling irradiance onto the ground, integrated from the view's cubes (16 bytes). */
   private downwellingBuffer: GPUBuffer;
   private downwellingBindGroup!: GPUBindGroup;
@@ -215,6 +218,8 @@ export class Renderer {
     this.downwellingPipeline = compute(module(downwellingWgsl, 'downwelling'), 'integrate');
     this.shadowPipeline = compute(cloudModule, 'ground_shadow');
     this.createOcean(module(oceanWgsl, 'ocean'), compute);
+    this.columnPipeline = compute(cloudModule, 'cloud_column');
+    this.columnTex = device.createTexture({ size: [COLUMN_SIZE, COLUMN_SIZE], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
     this.shadowTex = device.createTexture({ size: [512, 512], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
     this.downwellingBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
     this.displayPipeline = device.createRenderPipeline({
@@ -524,6 +529,8 @@ export class Renderer {
         { binding: 18, resource: groundCube.createView({ dimension: '2d-array' }) },
         { binding: 19, resource: this.oceanView() },
         { binding: 20, resource: this.oceanSampler },
+        // The path-traced reference does not read the column map.
+        ...(pipeline === this.referencePipeline ? [] : [{ binding: 22, resource: this.columnTex.createView() }]),
       ],
     });
   }
@@ -647,7 +654,10 @@ export class Renderer {
       this.weatherVersion++;
     }
     const anyCloudChange = [...this.pending].some((p) => p !== 'view');
-    if (anyCloudChange) this.runGroundShadow(encoder);
+    if (anyCloudChange) {
+      this.runCloudColumn(encoder);
+      this.runGroundShadow(encoder);
+    }
     this.pending.clear();
     if (anyCloudChange) this.cloudFrame = 0;
   }
@@ -674,6 +684,24 @@ export class Renderer {
       { binding: 3, resource: this.msLut.createView() },
       { binding: 5, resource: this.skyCube.createView({ dimension: '2d-array' }) },
     ], SKY_FACE, SKY_FACE, 6);
+    pass.end();
+  }
+
+  private runCloudColumn(encoder: GPUCommandEncoder): void {
+    const pass = encoder.beginComputePass({ label: 'cloud column' });
+    pass.setPipeline(this.columnPipeline);
+    pass.setBindGroup(0, this.device.createBindGroup({
+      layout: this.columnPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.paramsBuffer } },
+        { binding: 1, resource: this.repeatSampler },
+        { binding: 3, resource: this.shapeTex.createView() },
+        { binding: 4, resource: this.detailTex.createView() },
+        { binding: 5, resource: this.weatherTex.createView() },
+        { binding: 21, resource: this.columnTex.createView() },
+      ],
+    }));
+    pass.dispatchWorkgroups(COLUMN_SIZE / 8, COLUMN_SIZE / 8);
     pass.end();
   }
 
@@ -975,6 +1003,9 @@ export class Renderer {
     await this.device.queue.onSubmittedWorkDone();
   }
 }
+
+/** Side of the cloud column map, texels (over the weather map's period). */
+const COLUMN_SIZE = 512;
 
 /** The exposed scene before the camera: scene-linear, so highlights keep their energy for bokeh and glow. */
 const SCENE_FORMAT: GPUTextureFormat = 'rgba16float';

@@ -28,6 +28,10 @@
 // Wind waves (ocean.wgsl).
 @group(0) @binding(19) var ocean_tex: texture_2d_array<f32>;
 @group(0) @binding(20) var ocean_sampler: sampler;
+// Cloud column map over the weather map (cloud_column writes it, the view march reads it):
+// the optical depth of the cloud above three heights of the layer, for diffuse light.
+@group(0) @binding(21) var column_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(22) var column_tex: texture_2d<f32>;
 
 const BAYER_OFFSETS = array<vec2u, 16>(
   vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
@@ -265,6 +269,55 @@ fn far_optical_depth(origin: vec3f, start: f32, jitter: f32) -> f32 {
   }
   return depth;
 }
+
+// skyCaptain: the cloud column map. Diffuse light (skylight, and sunlight that has
+// diffused through a deck) reaches a point inside or under the clouds through the cloud
+// above it. Marching that column per sample was noisy and costly, so it is baked once per
+// cloud change over the weather map (same coordinates, repeating): per texel, the optical
+// depth above the bottom, a third and two thirds of the layer (light sees the smooth field).
+const COLUMN_STEPS: i32 = 24;
+
+@compute @workgroup_size(8, 8)
+fn cloud_column(@builtin(global_invocation_id) id: vec3u) {
+  let size = textureDimensions(column_out);
+  if (any(id.xy >= size)) { return; }
+  let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
+  let xz = (uv - 0.5) * params.scale.z - params.wind.xy;
+  let g = ground_point(xz);
+  let up = normalize(g);
+  let r0 = length(g);
+  let bottom = cloud_bottom();
+  let span = cloud_top() - bottom;
+  let ds = span / f32(COLUMN_STEPS);
+  // From the top down, noting the depth above each level as the march passes it.
+  var depth = 0.0;
+  var levels = vec4f(0.0);
+  for (var i = COLUMN_STEPS - 1; i >= 0; i--) {
+    let h = bottom + (f32(i) + 0.5) * ds;
+    depth += media_at(up * (r0 + h), 0.0) * ds;
+    if (i == COLUMN_STEPS * 2 / 3) { levels.z = depth; }
+    if (i == COLUMN_STEPS / 3) { levels.y = depth; }
+  }
+  levels.x = depth;
+  textureStore(column_out, id.xy, levels);
+}
+
+// Optical depth of the cloud above p, from the column map.
+fn column_optical_depth(p: vec3f) -> f32 {
+  let c = textureSampleLevel(column_tex, repeat_sampler, (p.xz + params.wind.xy) / params.scale.z + 0.5, 0.0);
+  let f = clamp((length(p) - ground_radius() - cloud_bottom()) / (cloud_top() - cloud_bottom()), 0.0, 1.0) * 3.0;
+  if (f < 1.0) { return mix(c.x, c.y, f); }
+  if (f < 2.0) { return mix(c.y, c.z, f - 1.0); }
+  return mix(c.z, 0.0, f - 2.0);
+}
+
+// Diffuse light through a cloud column of optical depth tau: the two-stream transmission
+// of a conservative scatterer, 1 / (1 + 0.75 (1 - g) tau). It falls off slowly (thick
+// overcast still passes ~10-30%), unlike the beam's exponential.
+fn diffuse_transmission(tau: f32) -> f32 {
+  return 1.0 / (1.0 + 0.75 * (1.0 - SKY_DIFFUSE_G) * tau);
+}
+const SKY_DIFFUSE_G: f32 = 0.85;
 
 fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
   // a: scattering, b: extinction, c: phase attenuation (Wrenninge et al.)
@@ -670,13 +723,22 @@ fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchRes
       let surface_normal = normalize(p);
       let to_sun = march_optical_depth(p, sun, ITERATIONS_TO_SUN, mip, jitter);
       let optical_depth = to_sun.optical_depth + far_optical_depth(p, to_sun.distance, hash33(seed + vec3u(u32(i), 31u, 0u)).x);
-      var radiance = sun_irradiance * approximate_multiple_scattering(optical_depth, cos_theta);
+      // skyCaptain: the cloud column above, for the diffuse light that reaches p through it.
+      let above = column_optical_depth(p);
+      // Deep in a thick cloud the octaves' beam decays to nothing, but sunlight diffusing
+      // down through the deck does not (overcast days keep ~10-30% of daylight): never less
+      // than the sun's diffuse irradiance through the column, isotropic (E / pi).
+      let diffuse_sun = max(sun.y, 0.0) * diffuse_transmission(above) / PI;
+      var radiance = sun_irradiance * max(approximate_multiple_scattering(optical_depth, cos_theta), diffuse_sun);
       if (mip < 0.5) {
         let to_ground = march_optical_depth(p, -surface_normal, ITERATIONS_TO_GROUND, mip, jitter);
         radiance += ground_radiance * exp(-to_ground.optical_depth) * RECIPROCAL_PI4 * GROUND_BOUNCE_SCALE;
       }
       // Crude approximation of the sky gradient. Better than none in the shadows.
-      radiance += sky_light * (w.hf * 0.5 + 0.5) * params.light.x;
+      // skyCaptain: dimmed by the cloud above (two-stream diffuse transmission): under a
+      // deck the base sees the light diffusing through it, not open blue sky, so overcast
+      // reads grey instead of blue.
+      radiance += sky_light * (w.hf * 0.5 + 0.5) * params.light.x * diffuse_transmission(above);
       radiance *= media.extinction;
       radiance *= 1.0 - params.ms.w * exp(-media.extinction * POWDER_EXPONENT_KM);
 
