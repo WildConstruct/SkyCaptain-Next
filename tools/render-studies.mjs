@@ -26,6 +26,9 @@ const STORM_SKY = {
   terrain: 1, terrainWater: 0.9, eyeAltitude: 0.03, terrainWind: 20, terrainFetch: 500, terrainWindHeading: 200,
   yaw: 20, pitch: 2, fov: 60, sunElevation: 25, sunAzimuth: 60, sunIntensity: 14, haze: 45, ambient: 0.4,
   forwardG: 0.7, powder: 1, density: 600, coverage: 0.55, typeBias: 0.35,
+  // Each storm cell strikes about 6 times a minute; a third of them to the sea. Lighter
+  // halation than the default: a bolt's reflections would otherwise glow orange.
+  lightning: 6, lightningGround: 0.35, halation: 0.015,
 };
 const STORM_SHAPES = [
   { kind: 'storm_cell', x: 6, z: 17, size: 8, seed: 3 },

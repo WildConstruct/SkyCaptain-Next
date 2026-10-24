@@ -83,6 +83,15 @@ const GROUPS: { title: string; expert?: boolean; sliders: SliderSpec[] }[] = [
     ],
   },
   {
+    title: 'Lightning',
+    sliders: [
+      { key: 'lightning', label: 'Strikes per minute (per storm cell)', min: 0, max: 30, step: 0.5 },
+      { key: 'lightningBrightness', label: 'Brightness', min: 0, max: 4, step: 0.05 },
+      { key: 'lightningGround', label: 'Cloud to ground', min: 0, max: 1, step: 0.01 },
+      { key: 'lightningSeed', label: 'Seed', min: 1, max: 999, step: 1 },
+    ],
+  },
+  {
     title: 'Eye',
     sliders: [
       { key: 'eyeAltitude', label: 'Elevation', min: 0, max: 20, step: 0.01, unit: 'km' },

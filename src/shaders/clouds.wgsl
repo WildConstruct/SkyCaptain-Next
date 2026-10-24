@@ -32,6 +32,20 @@
 // the optical depth of the cloud above three heights of the layer, for diffuse light.
 @group(0) @binding(21) var column_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(22) var column_tex: texture_2d<f32>;
+// Lightning (src/lightning.ts packLightning): the lit strikes' channels and flash lights.
+@group(0) @binding(23) var<storage, read> lightning: Lightning;
+
+struct BoltElement {
+  info: vec4f,    // first point, point count, intensity per km of channel, unused
+  sphere: vec4f,  // bounding sphere: centre (km), radius
+}
+
+struct Lightning {
+  header: vec4f,  // elements, flash lights
+  elements: array<BoltElement, 24>,
+  flashes: array<vec4f, 32>,  // xyz km, intensity
+  points: array<vec4f, 1560>,  // MAX_ELEMENTS x (CHANNEL_POINTS + 1)
+}
 
 const BAYER_OFFSETS = array<vec2u, 16>(
   vec2u(0u, 0u), vec2u(2u, 2u), vec2u(2u, 0u), vec2u(0u, 2u),
@@ -575,6 +589,7 @@ fn ground_radiance(o: vec3f, dir: vec3f, t_ground: f32, jitter: vec3f) -> Ground
     let overhead = exp(-layer_optical_depth(g, up, OVERHEAD_STEPS, jitter.y));
     direct += above * PI * (sky_top * 0.5 + sky_side * 0.5) * mix(0.35, 1.0, overhead);
   }
+  if (lightning_on()) { direct += flash_ground(g, n); }
   let air = air_between(o, g, dir);
   var hit: GroundHit;
   if (surface.water > 0.0) {
@@ -638,6 +653,126 @@ struct MarchResult {
   scatter: vec3f,
   transmittance: f32,
   ground: vec4f,  // the ground buffer for the composite (see GroundHit), seen through the clouds
+  probe: f32,     // transmittance up to the probe distance (a lightning channel), haze included
+}
+
+// ---- Lightning -------------------------------------------------------------------------
+// skyCaptain: strikes from storm cells (src/lightning.ts, docs/lightning.md). The channel
+// is a few polylines in km, built on the CPU per frame. Seen along a view ray, it is a hot
+// core and a soft halo, found once per ray (closest approach to each segment) and dimmed by
+// the clouds in front; in the clouds its light is a handful of point lights along it,
+// diffusing through the cloud (see flash_light).
+
+const BOLT_COLOR = vec3f(0.82, 0.88, 1.0);
+// The channel's apparent core (km): a return stroke's glowing channel is metres wide.
+const BOLT_CORE_KM: f32 = 0.004;
+// The halo of light scattered by rain and air round the channel (km), and its share. Faint:
+// the glow round a bolt is mostly the lens's (bloom, post.wgsl).
+const BOLT_HALO_KM: f32 = 0.05;
+const BOLT_HALO: f32 = 0.004;
+
+struct BoltHit {
+  radiance: vec3f,
+  t: f32,
+}
+
+// The bolt seen along a ray from o: the core (a Gaussian across the channel, widened to the
+// pixel and dimmed to keep its light) and the halo, the brightest point's distance in t.
+fn bolt_view(o: vec3f, dir: vec3f) -> BoltHit {
+  var hit: BoltHit;
+  hit.radiance = vec3f(0.0);
+  hit.t = -1.0;
+  let elements = u32(lightning.header.x);
+  var best = 0.0;
+  for (var e = 0u; e < elements; e++) {
+    let el = lightning.elements[e];
+    // Skip elements the ray passes far from.
+    let c = el.sphere.xyz - o;
+    let along_c = dot(c, dir);
+    let reach = el.sphere.w + BOLT_HALO_KM * 3.0;
+    if (dot(c, c) - along_c * along_c > reach * reach || along_c < -reach) { continue; }
+    let first = u32(el.info.x);
+    let count = u32(el.info.y);
+    var d_min = 1e9;
+    var t_min = -1.0;
+    for (var i = 1u; i < count; i++) {
+      let a = lightning.points[first + i - 1u].xyz - o;
+      let b = lightning.points[first + i].xyz - o;
+      // Closest approach between the ray (t >= 0) and the segment a..b.
+      let ab = b - a;
+      let d1 = dot(dir, ab);
+      let d2 = dot(ab, ab);
+      let e1 = dot(dir, a);
+      let e2 = dot(ab, a);
+      let denom = max(d2 - d1 * d1, 1e-9);
+      let u = clamp((d1 * e1 - e2) / denom, 0.0, 1.0);
+      let q = a + ab * u;
+      let t = max(dot(q, dir), 0.0);
+      let d = length(dir * t - q);
+      if (d < d_min) { d_min = d; t_min = t; }
+    }
+    if (t_min <= 0.0) { continue; }
+    // The core: a tent one footprint wide (integrating to the channel's light), with no
+    // tail: a Gaussian this bright stays white for texels round it and reads as a tube.
+    let w = max(BOLT_CORE_KM, t_min * texel_angle());
+    let core = max(1.0 - d_min / w, 0.0) / w;
+    let h = max(BOLT_HALO_KM, w);
+    let halo = BOLT_HALO * exp(-d_min * d_min / (h * h)) / (h * 1.7724539);
+    let light = el.info.z * (core + halo);
+    hit.radiance += BOLT_COLOR * light;
+    if (light > best) { best = light; hit.t = t_min; }
+  }
+  return hit;
+}
+
+// Lightning's light reaching p in or under a cloud: each flash light's intensity over
+// distance squared, through the cloud between them as diffuse light (the cloud lights up
+// as a whole, brightest near the channel). The cloud between is estimated once, by a short
+// march toward the nearest light, and scaled by distance for the others.
+fn flash_light(p: vec3f) -> vec3f {
+  let count = u32(lightning.header.y);
+  var nearest = 0u;
+  var d_near = 1e9;
+  for (var j = 0u; j < count; j++) {
+    let d = length(lightning.flashes[j].xyz - p);
+    if (d < d_near) { d_near = d; nearest = j; }
+  }
+  if (d_near > FLASH_RANGE_KM) { return vec3f(0.0); }
+  let toward = (lightning.flashes[nearest].xyz - p) / max(d_near, 1e-4);
+  let span = min(d_near, 3.0);
+  var tau = 0.0;
+  for (var k = 0; k < 3; k++) { tau += media_at(p + toward * span * (f32(k) + 0.5) / 3.0, 0.0); }
+  let tau_per_km = tau / 3.0;
+  var light = 0.0;
+  for (var j = 0u; j < count; j++) {
+    let f = lightning.flashes[j];
+    let d = length(f.xyz - p);
+    if (d > FLASH_RANGE_KM) { continue; }
+    light += f.w * diffuse_transmission(tau_per_km * d) / (4.0 * PI * (d * d + 0.01));
+  }
+  return BOLT_COLOR * light;
+}
+const FLASH_RANGE_KM: f32 = 12.0;
+
+fn lightning_on() -> bool { return lightning.header.y > 0.5; }
+
+// Lightning's light on the ground at g (normal n): each flash light through the cloud below
+// it (the column map: the cloud under the light) and the clear air beneath.
+fn flash_ground(g: vec3f, n: vec3f) -> vec3f {
+  let count = u32(lightning.header.y);
+  var light = 0.0;
+  for (var j = 0u; j < count; j++) {
+    let f = lightning.flashes[j];
+    let l = f.xyz - g;
+    let d = length(l);
+    if (d > FLASH_RANGE_KM * 2.0) { continue; }
+    let up = normalize(f.xyz);
+    let alt = length(f.xyz) - ground_radius();
+    let base = f.xyz - up * max(alt - cloud_bottom(), 0.0);
+    let below = max(column_optical_depth(base) - column_optical_depth(f.xyz), 0.0);
+    light += f.w * max(dot(n, l / max(d, 1e-4)), 0.0) * diffuse_transmission(below) / (d * d + 0.01);
+  }
+  return BOLT_COLOR * light;
 }
 
 // The view from the eye along dir: clouds, then the ground behind them (seen through what
@@ -650,7 +785,18 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   var span = shell_interval(origin, dir);
   // Clouds behind a ridge are hidden by it.
   if (t_ground > 0.0 && span.y > 0.0) { span.y = min(span.y, t_ground); }
-  var result = march_clouds(origin, dir, span, seed);
+  // A lightning channel along this ray, unless the ground is in front of it.
+  var bolt: BoltHit;
+  bolt.t = -1.0;
+  if (lightning.header.x > 0.5) {
+    bolt = bolt_view(origin, dir);
+    if (t_ground > 0.0 && bolt.t > t_ground) { bolt.t = -1.0; }
+  }
+  var result = march_clouds(origin, dir, span, seed, bolt.t);
+  if (bolt.t > 0.0) {
+    // Seen through the clouds in front of it and the air (the haze distance, as the clouds).
+    result.scatter += bolt.radiance * result.probe * exp(-bolt.t / (params.misc.x * 3.0));
+  }
   if (t_ground > 0.0) {
     let hit = ground_radiance(origin, dir, t_ground, jitter);
     result.scatter += (hit.radiance + air_inscatter(origin, dir, t_ground)) * result.transmittance;
@@ -660,10 +806,12 @@ fn march(dir: vec3f, seed: vec3u) -> MarchResult {
   return result;
 }
 
-fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchResult {
+fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u, probe_t: f32) -> MarchResult {
   var result: MarchResult;
   result.scatter = vec3f(0.0);
   result.transmittance = 1.0;
+  result.probe = 1.0;
+  var probed = probe_t <= span.x;
   let t_near = span.x;
   let t_far = min(span.y, t_near + MAX_RAY_KM);
   if (span.y <= 0.0 || t_far <= t_near) { return result; }
@@ -705,6 +853,10 @@ fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchRes
   for (var i = 0; i < max_iterations; i++) {
     if (d > max_d) { break; }
     let t = t_near + d;
+    if (!probed && t >= probe_t) {
+      result.probe = transmittance_integral;
+      probed = true;
+    }
     let p = origin + dir * t;
     let altitude = length(p) - ground_radius();
     let mip = log2(max(1.0, 1.0 + t * MIP_PER_KM));
@@ -737,6 +889,7 @@ fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchRes
       // deck the base sees the light diffusing through it, not open blue sky, so overcast
       // reads grey instead of blue.
       radiance += sky_light * (w.hf * 0.5 + 0.5) * params.light.x * diffuse_transmission(above);
+      if (lightning_on()) { radiance += flash_light(p); }
       radiance *= media.extinction;
       radiance *= 1.0 - params.ms.w * exp(-media.extinction * POWDER_EXPONENT_KM);
 
@@ -754,6 +907,7 @@ fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchRes
     d += step_size;
   }
 
+  if (!probed) { result.probe = transmittance_integral; }
   if (transmittance_sum <= 0.0) { return result; }
   // skyCaptain: Takram evaluates full aerial perspective at the transmittance-weighted
   // front depth (Frostbite 5.9.1). We fade toward the sky behind with the haze distance.
@@ -762,6 +916,7 @@ fn march_clouds(origin: vec3f, dir: vec3f, span: vec2f, seed: vec3u) -> MarchRes
   let alpha = remap_clamped(transmittance_integral, 1.0, MIN_TRANSMITTANCE);
   result.scatter = radiance_integral * fade;
   result.transmittance = 1.0 - alpha * fade;
+  result.probe = 1.0 - (1.0 - result.probe) * fade;
   return result;
 }
 

@@ -1,3 +1,4 @@
+import { LIGHTNING_FLOATS, packLightning, strikesAt } from './lightning';
 import commonWgsl from './shaders/common.wgsl?raw';
 import groundWgsl from './shaders/ground.wgsl?raw';
 import oceanWgsl from './shaders/ocean.wgsl?raw';
@@ -118,6 +119,8 @@ export class Renderer {
   /** Cloud column map (clouds.wgsl cloud_column): optical depth above three layer heights. */
   private columnTex: GPUTexture;
   private columnPipeline: GPUComputePipeline;
+  /** Lit lightning strikes (src/lightning.ts packLightning), repacked with each cloud change. */
+  private lightningBuffer: GPUBuffer;
   /** Downwelling irradiance onto the ground, integrated from the view's cubes (16 bytes). */
   private downwellingBuffer: GPUBuffer;
   private downwellingBindGroup!: GPUBindGroup;
@@ -219,6 +222,7 @@ export class Renderer {
     this.shadowPipeline = compute(cloudModule, 'ground_shadow');
     this.createOcean(module(oceanWgsl, 'ocean'), compute);
     this.columnPipeline = compute(cloudModule, 'cloud_column');
+    this.lightningBuffer = device.createBuffer({ size: LIGHTNING_FLOATS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     this.columnTex = device.createTexture({ size: [COLUMN_SIZE, COLUMN_SIZE], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
     this.shadowTex = device.createTexture({ size: [512, 512], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
     this.downwellingBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
@@ -532,6 +536,7 @@ export class Renderer {
         { binding: 19, resource: this.oceanView() },
         { binding: 20, resource: this.oceanSampler },
         { binding: 22, resource: this.columnTex.createView() },
+        { binding: 23, resource: { buffer: this.lightningBuffer } },
       ],
     });
   }
@@ -658,6 +663,7 @@ export class Renderer {
     }
     const anyCloudChange = [...this.pending].some((p) => p !== 'view');
     if (anyCloudChange) {
+      this.device.queue.writeBuffer(this.lightningBuffer, 0, packLightning(strikesAt(this.shapes, this.settings), this.settings));
       this.runCloudColumn(encoder);
       this.runGroundShadow(encoder);
     }

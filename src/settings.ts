@@ -50,6 +50,13 @@ export interface Settings {
   evolve: number;
   /** Eye height above the ground, km: from standing on the ground to above the clouds. */
   eyeAltitude: number;
+  /** Lightning: strikes per minute from each storm-cell shape layer (0 = none). */
+  lightning: number;
+  /** Lightning brightness (1 = a return stroke as bright as nature's, against this sun). */
+  lightningBrightness: number;
+  /** Share of strikes that run cloud to ground (the rest stay inside the cloud). */
+  lightningGround: number;
+  lightningSeed: number;
   /** Scene time, seconds: the waves' clock (animation sets it; a still is time 0). */
   sceneTime: number;
   ev: number;
@@ -106,6 +113,10 @@ export const DEFAULTS: Settings = {
   seed: 1,
   evolve: 0,
   eyeAltitude: 0,
+  lightning: 0,
+  lightningBrightness: 1,
+  lightningGround: 0.35,
+  lightningSeed: 1,
   sceneTime: 0,
   ev: 0,
   grain: 0,

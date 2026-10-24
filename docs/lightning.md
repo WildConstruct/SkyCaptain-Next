@@ -1,4 +1,10 @@
-# Lightning (design, not built yet)
+# Lightning
+
+Status: v1 built (clock, channel, visible bolt, cloud flash, ground flash; storm-cell
+strikes; Lightning panel). Still to come: a frozen strike for stills and HDRI, per-cell
+rates, and a Lightning paint channel.
+
+## Design
 
 Lightning for storm skies and clips. What we take from Ethera, and what has to differ
 because skyCaptain lights a whole sky from a fixed eye.

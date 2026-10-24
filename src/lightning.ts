@@ -11,6 +11,9 @@
 // Here the channel is built on the CPU once per frame, as polylines in world km (the
 // main channel and its branches), and the cloud pass reads them (see docs/lightning.md).
 
+import type { Settings } from './settings';
+import type { ShapeLayer } from './shapes';
+
 export type Vec3 = [number, number, number];
 
 export interface StrikeTiming {
@@ -119,8 +122,8 @@ export interface ChannelShape {
 
 export const DEFAULT_SHAPE: ChannelShape = { rough: 0.9, detail: 0.6, branches: 5, branchAngle: 0.6, branchLength: 0.35 };
 
-export const CHANNEL_POINTS = 48;
-export const BRANCH_POINTS = 12;
+export const CHANNEL_POINTS = 64;
+export const BRANCH_POINTS = 16;
 
 /** One element of a bolt: a polyline (km) and its share of the channel's brightness. */
 export interface ChannelElement {
@@ -140,11 +143,12 @@ const smooth = (e0: number, e1: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-/** Two smooth noise values in -1..1 at x (seeded value noise). */
+/** Two noise values in -1..1 at x (seeded value noise, piecewise linear). */
 function channelNoise(seed: number, x: number): [number, number] {
   const i = Math.floor(x);
   const f = x - i;
-  const w = f * f * (3 - 2 * f);
+  // Linear between the knots: lightning kinks sharply rather than curving.
+  const w = f;
   const h = (k: number, c: number) => hashUnit(Math.imul(k, 374761393) ^ Math.imul(Math.round(seed * 1000) | 0, 668265263) ^ c) * 2 - 1;
   return [h(i, 1) + (h(i + 1, 1) - h(i, 1)) * w, h(i, 2) + (h(i + 1, 2) - h(i, 2)) * w];
 }
@@ -213,3 +217,140 @@ export function channel(start: Vec3, end: Vec3, seed: number, s: ChannelShape, g
   }
   return out;
 }
+
+// ---- Strikes in a sky ---------------------------------------------------------------
+// Storm-cell shape layers throw strikes: each cell strikes at `rate` per minute, a seeded
+// Poisson process in scene time, at a seeded spot under it. A share of them run cloud to
+// ground; the rest stay inside the cloud (only their glow shows). Positions are world km
+// (the eye over the origin); a cell's map position drifts with the wind.
+
+
+const EARTH_RADIUS_KM = 6360;
+
+export interface Strike {
+  start: Vec3;
+  end: Vec3;
+  timing: StrikeTiming;
+  state: StrikeState;
+  seed: number;
+  /** Cloud to ground (else in-cloud). */
+  ground: boolean;
+}
+
+/** Scene-time strike times of one cell, in order, up to `until`. */
+function strikeTimesOf(seed: number, ratePerMin: number, until: number): number[] {
+  const rate = ratePerMin / 60;
+  if (rate <= 0) return [];
+  const out: number[] = [];
+  let t = 0;
+  for (let k = 0; k < 10000; k++) {
+    // Exponential gaps; the first strike can fall anywhere in the first gap.
+    t += -Math.log(1 - 0.999 * hashUnit(seed * 15485863 + k * 104729)) / rate;
+    if (t > until) break;
+    out.push(t);
+  }
+  return out;
+}
+
+/** A point at height `alt` (km) above the ground at world xz, on the curved earth. */
+function worldPoint(x: number, z: number, alt: number): Vec3 {
+  const r = EARTH_RADIUS_KM + alt;
+  const y = Math.sqrt(Math.max(EARTH_RADIUS_KM * EARTH_RADIUS_KM - x * x - z * z, 0));
+  const k = r / EARTH_RADIUS_KM;
+  return [x * k, y * k, z * k];
+}
+
+/** Strikes lit at the settings' scene time. */
+export function strikesAt(shapes: ShapeLayer[], s: Settings): Strike[] {
+  const time = s.sceneTime;
+  const out: Strike[] = [];
+  if (!(s.lightning > 0)) return out;
+  shapes.forEach((shape, c) => {
+    if (shape.kind !== 'storm_cell' || !shape.visible) return;
+    const cellSeed = (s.lightningSeed * 7919 + shape.seed * 31 + c * 977) | 0;
+    const times = strikeTimesOf(cellSeed, s.lightning, time);
+    // Only the last few can still be lit (a strike lasts well under 2 s).
+    for (const [k, at] of times.slice(-4).entries()) {
+      const seed = (cellSeed * 131 + Math.round(at * 1000)) | 0;
+      const timing: StrikeTiming = { ...DEFAULT_TIMING, strikeAt: at, seed, restrikes: Math.floor(hashUnit(seed + 3) * 4) };
+      const state = strikeState(timing, time);
+      if (!state.active) continue;
+      const h = (n: number) => hashUnit(seed * 2654435761 + n * 97 + k);
+      const reach = shape.size * 0.45;
+      const a = h(1) * 2 * Math.PI, r = Math.sqrt(h(2)) * reach;
+      // Map position to world: the weather is sampled at world + wind.
+      const x = shape.x - s.windX + Math.cos(a) * r;
+      const z = shape.z - s.windZ + Math.sin(a) * r;
+      const ground = h(3) < s.lightningGround;
+      const top = s.cloudBottom + 0.4 + h(4) * 1.2;
+      let end: Vec3;
+      if (ground) {
+        const b = h(5) * 2 * Math.PI, o = h(6) * 2;
+        end = worldPoint(x + Math.cos(b) * o, z + Math.sin(b) * o, 0);
+      } else {
+        const b = h(5) * 2 * Math.PI, o = 3 + h(6) * 5;
+        end = worldPoint(x + Math.cos(b) * o, z + Math.sin(b) * o, top + (h(7) - 0.5) * 1.5);
+      }
+      out.push({ start: worldPoint(x, z, top), end, timing, state, seed, ground });
+    }
+  });
+  return out;
+}
+
+// ---- GPU layout (clouds.wgsl Lightning) ---------------------------------------------
+
+export const MAX_ELEMENTS = 24;
+export const MAX_FLASHES = 32;
+export const MAX_BOLT_POINTS = MAX_ELEMENTS * (CHANNEL_POINTS + 1);
+/** Flash lights along each strike's main channel. */
+const FLASHES_PER_STRIKE = 6;
+export const LIGHTNING_FLOATS = 4 + MAX_ELEMENTS * 8 + MAX_FLASHES * 4 + MAX_BOLT_POINTS * 4;
+
+/**
+ * The lit strikes as the cloud pass reads them: a header (elements, flash lights), per
+ * element its first point, point count, intensity and bounding sphere, the flash lights
+ * (point lights along each channel, for the cloud's glow) and the channel points (km).
+ * Intensity is in scene units per km of channel, scaled by the brightness setting.
+ */
+export function packLightning(strikes: Strike[], s: Settings, shape: ChannelShape = DEFAULT_SHAPE): Float32Array<ArrayBuffer> {
+  const data = new Float32Array(LIGHTNING_FLOATS);
+  const elementsAt = 4, flashesAt = elementsAt + MAX_ELEMENTS * 8, pointsAt = flashesAt + MAX_FLASHES * 4;
+  let elements = 0, flashes = 0, points = 0;
+  const power = LIGHTNING_POWER * s.lightningBrightness;
+  for (const strike of strikes) {
+    const parts = channel(strike.start, strike.end, strike.seed, shape, strike.state.growth);
+    for (const [i, part] of parts.entries()) {
+      if (elements >= MAX_ELEMENTS || points + part.points.length > MAX_BOLT_POINTS) break;
+      let cx = 0, cy = 0, cz = 0;
+      for (const p of part.points) { cx += p[0]; cy += p[1]; cz += p[2]; }
+      const n = part.points.length;
+      cx /= n; cy /= n; cz /= n;
+      let radius = 0;
+      for (const p of part.points) radius = Math.max(radius, Math.hypot(p[0] - cx, p[1] - cy, p[2] - cz));
+      data.set([points, n, power * strike.state.brightness * part.weight, 0, cx, cy, cz, radius], elementsAt + elements * 8);
+      part.points.forEach((p, j) => data.set([p[0], p[1], p[2], 0], pointsAt + (points + j) * 4));
+      points += n;
+      elements++;
+      // Flash lights along the main channel: its light, split among them.
+      if (i === 0) {
+        for (let f = 0; f < FLASHES_PER_STRIKE && flashes < MAX_FLASHES; f++) {
+          const p = part.points[Math.min(n - 1, Math.round(((f + 0.5) / FLASHES_PER_STRIKE) * (n - 1)))];
+          const length = Math.hypot(strike.end[0] - strike.start[0], strike.end[1] - strike.start[1], strike.end[2] - strike.start[2]);
+          data.set([p[0], p[1], p[2], (FLASH_SHARE * power * strike.state.brightness * length * strike.state.growth) / FLASHES_PER_STRIKE], flashesAt + flashes * 4);
+          flashes++;
+        }
+      }
+    }
+  }
+  data.set([elements, flashes, 0, 0], 0);
+  return data;
+}
+
+/** Light per km of channel at a return stroke's peak, scene units (the sun's irradiance is ~15). */
+export const LIGHTNING_POWER = 400;
+/**
+ * The share of it that lights the cloud and ground round the channel. Seen directly the
+ * channel is blinding; by day the cloud it lights brightens a few times over its storm-dim
+ * self, not tens of times.
+ */
+const FLASH_SHARE = 0.12;
