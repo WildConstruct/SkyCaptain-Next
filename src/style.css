@@ -26,6 +26,7 @@ main {
 }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
 .chips button { flex: 0 0 auto; padding: 3px 7px; font-size: 11px; }
+.chips button.selected { background: #22324a; border-color: var(--accent); }
 .layers { list-style: none; margin: 6px 0; padding: 0; border: 1px solid var(--line); border-radius: 4px; }
 .layers li {
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px;

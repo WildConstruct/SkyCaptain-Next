@@ -1,6 +1,9 @@
-// Ground panel: terrain on or off, a new layout, and the recipe's main controls.
+// Ground panel: terrain on or off, a new layout, painting land cover on a top-down map, and
+// the recipe's main controls.
 
 import type { GroundStore } from '../ground';
+import type { Settings } from '../settings';
+import { GroundMap } from './ground-map';
 import { TERRAIN_TYPES, type TerrainRecipe } from '../terrain';
 
 type RecipeNumber = 'waterLevel' | 'relief' | 'patchKm' | 'tileKm' | 'heightKm' | 'ridges' | 'snowKm' | 'waveWindMs' | 'waveFetchKm';
@@ -20,8 +23,12 @@ const SLIDERS: { key: RecipeNumber; label: string; min: number; max: number; ste
 export class GroundPanel {
   private inputs = new Map<string, { input: HTMLInputElement; value: HTMLElement; unit: string }>();
   private enabled: HTMLInputElement;
+  /** The paint map (main.ts redraws it with the view each frame). */
+  readonly map: GroundMap;
+  private paintChips = new Map<number, HTMLButtonElement>();
+  private clearPaint: HTMLButtonElement;
 
-  constructor(root: HTMLElement, private store: GroundStore, faceBearing?: (degrees: number) => void) {
+  constructor(root: HTMLElement, private store: GroundStore, settings: Settings, faceBearing?: (degrees: number) => void) {
     const toggleRow = document.createElement('label');
     toggleRow.className = 'check';
     this.enabled = document.createElement('input');
@@ -48,6 +55,51 @@ export class GroundPanel {
       actions.append(face);
     }
     root.append(toggleRow, actions);
+
+    // Paint: choose a land cover and drag on the map; the collapse fills in around it.
+    const paint = document.createElement('details');
+    const paintSummary = document.createElement('summary');
+    paintSummary.textContent = 'Paint';
+    paint.append(paintSummary);
+    const canvas = document.createElement('canvas');
+    canvas.className = 'minimap';
+    canvas.title = 'Drag to paint land cover; the layout recollapses around it when you let go. Centred on the eye, north up.';
+    this.map = new GroundMap(canvas, settings, store);
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    const choices: [number, string][] = [[-1, 'Auto'], ...TERRAIN_TYPES.map((t, i): [number, string] => [i, t[0].toUpperCase() + t.slice(1)])];
+    for (const [type, label] of choices) {
+      const chip = document.createElement('button');
+      chip.textContent = label;
+      chip.title = type < 0 ? 'Hand painted tiles back to the collapse' : `Paint ${label.toLowerCase()}`;
+      chip.onclick = () => { this.map.type = type; this.syncPaint(); };
+      this.paintChips.set(type, chip);
+      chips.append(chip);
+    }
+    const sizeRow = document.createElement('label');
+    sizeRow.className = 'row';
+    sizeRow.title = 'Brush radius, in layout tiles';
+    const sizeName = document.createElement('span');
+    sizeName.textContent = 'Brush';
+    const sizeValue = document.createElement('span');
+    sizeValue.className = 'value';
+    const size = document.createElement('input');
+    size.type = 'range';
+    size.min = '0';
+    size.max = '12';
+    size.step = '0.5';
+    size.value = String(this.map.radius);
+    const showSize = () => { sizeValue.textContent = `${this.map.radius} tiles`; };
+    size.oninput = () => { this.map.radius = Number(size.value); showSize(); };
+    showSize();
+    sizeRow.append(sizeName, sizeValue, size);
+    const paintActions = document.createElement('div');
+    paintActions.className = 'row actions';
+    this.clearPaint = document.createElement('button');
+    this.clearPaint.onclick = () => store.clearPaint();
+    paintActions.append(this.clearPaint);
+    paint.append(canvas, chips, sizeRow, paintActions);
+    root.append(paint);
 
     const slider = (key: string, label: string, min: number, max: number, step: number, unit: string, hint: string, apply: (v: number) => void) => {
       const row = document.createElement('label');
@@ -98,5 +150,13 @@ export class GroundPanel {
     };
     for (const s of SLIDERS) show(s.key, r[s.key]);
     for (const t of TERRAIN_TYPES) show(`weight.${t}`, r.weights[t]);
+    this.syncPaint();
+  }
+
+  private syncPaint(): void {
+    for (const [type, chip] of this.paintChips) chip.classList.toggle('selected', type === this.map.type);
+    const painted = this.store.paintedCount;
+    this.clearPaint.textContent = painted ? `Clear paint (${painted} tiles)` : 'Clear paint';
+    this.clearPaint.disabled = painted === 0;
   }
 }

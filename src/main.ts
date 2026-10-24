@@ -358,7 +358,7 @@ async function main(): Promise<void> {
   groundSummary.textContent = 'Ground';
   const groundRoot = document.createElement('div');
   groundSection.append(groundSummary, groundRoot);
-  new GroundPanel(groundRoot, ground, (bearing) => set('yaw', bearing));
+  const groundPanel = new GroundPanel(groundRoot, ground, settings, (bearing) => set('yaw', bearing));
   // ?aimRelief=1 (tools/): face the most prominent relief.
   if (query.get('aimRelief') === '1') {
     const bearing = ground.reliefBearing();
@@ -491,6 +491,8 @@ async function main(): Promise<void> {
     refreshMinimap();
     minimap.viewAspect = canvas.clientWidth / Math.max(1, canvas.clientHeight);
     minimap.draw();
+    groundPanel.map.viewAspect = minimap.viewAspect;
+    groundPanel.map.draw();
     overlay.draw();
     requestAnimationFrame(loop);
   };

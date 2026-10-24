@@ -27,13 +27,49 @@ export class GroundStore {
     return () => this.listeners.delete(fn);
   }
 
-  private changed(regenerate: boolean): void {
+  private changed(regenerate: boolean, keepPlace = false): void {
     if (regenerate) {
       this.map = generateTerrain(this.recipe, this.constraints);
       this.height = heightField(this.map, this.recipe);
-      this.place = standpoint(this.map, this.height, this.recipe);
+      if (!keepPlace) this.place = standpoint(this.map, this.height, this.recipe);
     }
     for (const fn of this.listeners) fn();
+  }
+
+  /**
+   * Paints a disc of tiles (radius in tiles, wrapping) with a type index, or -1 to hand
+   * them back to the collapse. Nothing recollapses until commitPaint().
+   */
+  paintTiles(tx: number, ty: number, radius: number, type: number): void {
+    const n = TERRAIN_GRID;
+    const r = Math.max(0, radius);
+    for (let dy = -Math.ceil(r); dy <= Math.ceil(r); dy++) {
+      for (let dx = -Math.ceil(r); dx <= Math.ceil(r); dx++) {
+        if (dx * dx + dy * dy > r * r + 0.25) continue;
+        const x = (((tx + dx) % n) + n) % n;
+        const y = (((ty + dy) % n) + n) % n;
+        this.constraints[y * n + x] = type;
+      }
+    }
+  }
+
+  /** Recollapses around the painted tiles. The eye stays where it stands while painting. */
+  commitPaint(): void {
+    this.enabled = true;
+    this.changed(true, true);
+  }
+
+  /** Hands every painted tile back to the collapse. */
+  clearPaint(): void {
+    this.constraints.fill(-1);
+    this.changed(true, true);
+  }
+
+  /** How many tiles are painted. */
+  get paintedCount(): number {
+    let n = 0;
+    for (const v of this.constraints) if (v >= 0) n++;
+    return n;
   }
 
   setEnabled(on: boolean): void {

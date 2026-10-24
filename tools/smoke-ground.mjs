@@ -62,5 +62,28 @@ await page.waitForFunction(() => window.skyGround.enabled && window.skyGround.re
 assert.deepEqual(await page.evaluate(() => Array.from(window.skyGround.map.types.slice(0, 4096))), state.types, 'the same layout comes back');
 console.log('terrain round-trips through the sky file');
 
+// 5. Painting on the ground map: water under a stroke, kept by the collapse, eye unmoved.
+await page.getByText('Paint', { exact: true }).click();
+await page.getByRole('button', { name: 'Water', exact: true }).click();
+const place = await page.evaluate(() => ({ ...window.skyGround.place }));
+const map = page.locator('canvas.minimap').last();
+const box = await map.boundingBox();
+await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
+await page.mouse.down();
+await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.3, { steps: 5 });
+await page.mouse.up();
+const painted = await page.evaluate(() => {
+  const g = window.skyGround;
+  let n = 0, kept = 0;
+  g.constraints.forEach((v, i) => { if (v >= 0) { n++; if (g.map.types[i] === v) kept++; } });
+  return { n, kept, place: { ...g.place } };
+});
+assert.ok(painted.n > 20, `a stroke paints tiles (${painted.n})`);
+assert.equal(painted.kept, painted.n, 'the collapse keeps painted tiles');
+assert.deepEqual(painted.place, place, 'painting does not move the eye');
+await page.getByRole('button', { name: /Clear paint/ }).click();
+assert.equal(await page.evaluate(() => window.skyGround.paintedCount), 0, 'Clear paint hands tiles back');
+console.log(`painted ${painted.n} tiles of water`);
+
 await browser.close();
 console.log('smoke-ground: all passed');
