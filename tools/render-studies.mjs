@@ -50,7 +50,7 @@ const STUDIES = [
   },
   {
     name: 'lake-mountains-1x', hint: 'A lake under a mountain range at real speed, long lens, from the shore',
-    sky: { terrain: 1, terrainWater: 0.4, terrainHeight: 2.5, terrainRidges: 0.8, pitch: 2, fov: 30, sunElevation: 12, sunAzimuth: 100, aimRelief: 1 }, anim: { timeLapse: 1 },
+    sky: { terrain: 1, terrainWater: 0.4, terrainHeight: 2.5, terrainRidges: 0.8, eyeAltitude: 0.04, pitch: -1, fov: 30, sunElevation: 12, sunAzimuth: 100, aimRelief: 1 }, anim: { timeLapse: 1 },
   },
 ];
 

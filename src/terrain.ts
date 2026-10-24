@@ -528,7 +528,9 @@ export interface Standpoint {
 /**
  * Where to stand to see mountains: low land, near water if there is any, with the highest
  * ranges 15-80 km away rising as high as possible above the horizon (earth curvature
- * counted). Flat ground: the origin, facing north.
+ * counted), over an open foreground: nothing nearer may rise into the view of them (a
+ * hillside under the eye would fill the frame), and water in between is preferred.
+ * Flat ground: the origin, facing north.
  */
 export function standpoint(map: TerrainMap, field: HeightField, recipe: TerrainRecipe): Standpoint {
   if (recipe.heightKm <= 0) return { x: 0, z: 0, bearing: 0 };
@@ -557,7 +559,26 @@ export function standpoint(map: TerrainMap, field: HeightField, recipe: TerrainR
           const h = at(x + Math.sin(r) * d, z + Math.cos(r) * d) - h0 - (d * d) / (2 * 6360);
           rise = Math.max(rise, Math.atan2(h, d));
         }
-        const score = rise + shore * 0.01;
+        // The foreground toward them: the highest it rises in view, and how much is water.
+        let near = -Infinity;
+        let water = 0;
+        let samples = 0;
+        let shoreFront = 0;
+        for (let d = 0.25; d < 15; d += d < 2 ? 0.25 : 1) {
+          const px = x + Math.sin(r) * d, pz = z + Math.cos(r) * d;
+          near = Math.max(near, Math.atan2(at(px, pz) - h0 - (d * d) / (2 * 6360), d));
+          if (d <= 8) {
+            samples++;
+            const wet = type(Math.floor(px / recipe.tileKm), Math.floor(pz / recipe.tileKm)) === 0;
+            if (wet) water++;
+            // Water starting right in front: a shore, not a beach a kilometre wide.
+            if (wet && d <= 1) shoreFront = 1;
+          }
+        }
+        // The range must clear the foreground by a margin; ground rising more than ~1 degree
+        // in front costs heavily.
+        const blocked = Math.max(0, near - (rise - 0.01)) + Math.max(0, near - 0.017) * 2;
+        const score = rise - blocked * 4 + shore * 0.01 + (water / samples) * 0.02 + shoreFront * 0.02;
         if (score > best.score) best = { x, z, bearing: a, score };
       }
     }
