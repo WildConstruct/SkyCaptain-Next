@@ -5,7 +5,9 @@
 // frames (needs python3 with Pillow).
 // Usage: node tools/clip-preview.mjs <out.mp4|out.gif> [query string] [frames|all] [animation JSON]
 //        [shape layers JSON] [width]
-// Frames default to all of them for .mp4 and 12 for .gif.
+// Frames default to all of them for .mp4 and 12 for .gif. shutter=<degrees> in the query
+// (e.g. 180) gives each video frame motion blur: the moving water is averaged over that
+// share of the frame time, at shutterSamples sub-frames (default 8). Clouds hold still.
 import { chromium } from 'playwright-core';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -64,6 +66,10 @@ if (mp4) {
     '-movflags', '+faststart', out], { stdio: ['pipe', 'inherit', 'inherit'] });
   ffmpegDone = new Promise((resolve, reject) => ffmpeg.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)))));
 }
+const shutterDeg = Number(new URLSearchParams(query).get('shutter') ?? 0);
+const shutter = mp4 && shutterDeg > 0
+  ? { seconds: shutterDeg / 360 / fps, samples: Number(new URLSearchParams(query).get('shutterSamples') ?? 8) }
+  : null;
 let renderSeconds = 0;
 for (let i = 0; i < frames; i++) {
   // Every frame at its own time for video; evenly sampled across the clip otherwise.
@@ -73,12 +79,12 @@ for (let i = 0; i < frames; i++) {
   await page.evaluate(async (t) => { window.skyAnimate.seek(t); await window.skyConverge(); }, t);
   renderSeconds += (Date.now() - renderStart) / 1000;
   if (mp4) {
-    const b64 = await page.evaluate(async ([w, h]) => {
-      const pixels = new Uint8Array(await window.skyCapture(w, h));
+    const b64 = await page.evaluate(async ([w, h, shutter]) => {
+      const pixels = new Uint8Array(await window.skyCapture(w, h, shutter ?? undefined));
       let s = '';
       for (let j = 0; j < pixels.length; j += 0x8000) s += String.fromCharCode.apply(null, pixels.subarray(j, j + 0x8000));
       return btoa(s);
-    }, [width, height]);
+    }, [width, height, shutter]);
     if (!ffmpeg.stdin.write(Buffer.from(b64, 'base64'))) await new Promise((resolve) => ffmpeg.stdin.once('drain', resolve));
   } else {
     const dataUrl = await page.evaluate(async ([w, h]) => {

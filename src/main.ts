@@ -1,5 +1,5 @@
 import { DEFAULTS, QUALITY, QualityName, Settings, invalidationFor } from './settings';
-import { Renderer, WEATHER_SIZE } from './renderer';
+import { Renderer, Shutter, WEATHER_SIZE } from './renderer';
 import { History } from './history';
 import { BRUSH_TOOLS, PaintLayers } from './paint';
 import { Stroke, ToolState } from './ui/tools';
@@ -170,7 +170,7 @@ async function main(): Promise<void> {
     skyPaint: layers,
     skyTools: tools,
     skyHistory: history,
-    skyCapture: (w: number, h: number) => renderer.capture(viewUniforms(settings, w / h), w, h),
+    skyCapture: (w: number, h: number, shutter?: Shutter) => renderer.capture(viewUniforms(settings, w / h), w, h, shutter),
     skyConverge: () => renderer.converge(),
   });
 

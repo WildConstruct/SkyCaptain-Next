@@ -103,6 +103,8 @@ export class Renderer {
   private referencePipeline: GPUComputePipeline;
   private displayPipeline: GPURenderPipeline;
   /** The camera (post.wgsl): mip downsampling of the exposed scene, then lens, glow and film. */
+  /** The scene pass adding a weighted share into the target: shutter sub-frames for clips. */
+  private sceneAccumPipeline: GPURenderPipeline;
   private downPipeline: GPURenderPipeline;
   private postPipeline: GPURenderPipeline;
   private postSampler: GPUSampler;
@@ -124,6 +126,7 @@ export class Renderer {
   private cloudBindGroup!: GPUBindGroup;
   private referenceBindGroup!: GPUBindGroup;
   private displayBindGroup!: GPUBindGroup;
+  private sceneAccumBindGroup!: GPUBindGroup;
 
   private cloudFrame = 0;
   /** Increments whenever the weather map is regenerated (for minimap refreshes). */
@@ -218,6 +221,13 @@ export class Renderer {
       layout: 'auto',
       vertex: { module: displayModule, entryPoint: 'vs' },
       fragment: { module: displayModule, entryPoint: 'fs', targets: [{ format: SCENE_FORMAT }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    const add: GPUBlendComponent = { operation: 'add', srcFactor: 'constant', dstFactor: 'one' };
+    this.sceneAccumPipeline = device.createRenderPipeline({
+      layout: 'auto',
+      vertex: { module: displayModule, entryPoint: 'vs' },
+      fragment: { module: displayModule, entryPoint: 'fs', targets: [{ format: SCENE_FORMAT, blend: { color: add, alpha: add } }] },
       primitive: { topology: 'triangle-list' },
     });
     const postModule = module(postWgsl, 'post');
@@ -356,19 +366,19 @@ export class Renderer {
   }
 
   /** How far gusts on the water have travelled downwind, km: they run with the wind. */
-  private gustDrift(): number {
-    return (this.waves.windMs * this.settings.sceneTime) / 1000;
+  private gustDrift(time = this.settings.sceneTime): number {
+    return (this.waves.windMs * time) / 1000;
   }
 
-  /** Solves the waves for the current scene time when they or the time changed. */
-  private runOcean(encoder: GPUCommandEncoder): void {
-    const key = JSON.stringify([this.waves, this.settings.sceneTime]);
+  /** Solves the waves for the scene time (or another time) when they or the time changed. */
+  private runOcean(encoder: GPUCommandEncoder, time = this.settings.sceneTime): void {
+    const key = JSON.stringify([this.waves, time]);
     if (key === this.oceanKey) return;
     this.oceanKey = key;
     const o = this.ocean;
     const n = OCEAN_N;
-    this.device.queue.writeBuffer(o.params, 0, packOcean(this.waves, this.settings.sceneTime));
-    this.device.queue.writeBuffer(this.groundBuffer, 42 * 4, new Float32Array([this.gustDrift()]));
+    this.device.queue.writeBuffer(o.params, 0, packOcean(this.waves, time));
+    this.device.queue.writeBuffer(this.groundBuffer, 42 * 4, new Float32Array([this.gustDrift(time)]));
     const pass = encoder.beginComputePass({ label: 'ocean' });
     pass.setPipeline(o.spectrum);
     pass.setBindGroup(0, o.groups.spectrum);
@@ -462,8 +472,8 @@ export class Renderer {
     this.cloudBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube, this.groundAccum, this.groundCube);
     this.downwellingBindGroup = this.downwellingBindGroupFor(this.cloudCube, this.downwellingBuffer);
     this.referenceBindGroup = this.cloudBindGroupFor(this.paramsBuffer, this.accumBuffer, this.cloudCube, this.groundAccum, this.groundCube, this.referencePipeline);
-    this.displayBindGroup = this.device.createBindGroup({
-      layout: this.displayPipeline.getBindGroupLayout(0),
+    const displayGroup = (pipeline: GPURenderPipeline) => this.device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.paramsBuffer } },
         { binding: 1, resource: { buffer: this.viewBuffer } },
@@ -479,6 +489,8 @@ export class Renderer {
         { binding: 12, resource: this.shadowTex.createView() },
       ],
     });
+    this.displayBindGroup = displayGroup(this.displayPipeline);
+    this.sceneAccumBindGroup = displayGroup(this.sceneAccumPipeline);
   }
 
   private createCube(face: number): GPUTexture {
@@ -828,20 +840,29 @@ export class Renderer {
     }
   }
 
-  private drawView(encoder: GPUCommandEncoder, target: GPUTexture): void {
+  private drawView(encoder: GPUCommandEncoder, target: GPUTexture, sceneDone = false): void {
     const post = this.postTarget(target.width, target.height);
-    const pass = (view: GPUTextureView, pipeline: GPURenderPipeline, group: GPUBindGroup) => {
-      const p = encoder.beginRenderPass({
-        colorAttachments: [{ view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
-      });
-      p.setPipeline(pipeline);
-      p.setBindGroup(0, group);
-      p.draw(3);
-      p.end();
-    };
-    pass(post.levels[0], this.displayPipeline, this.displayBindGroup);
-    for (let i = 1; i < post.levels.length; i++) pass(post.levels[i], this.downPipeline, post.down[i - 1]);
-    pass(target.createView(), this.postPipeline, post.group);
+    if (!sceneDone) fullscreenPass(encoder, post.levels[0], this.displayPipeline, this.displayBindGroup);
+    for (let i = 1; i < post.levels.length; i++) fullscreenPass(encoder, post.levels[i], this.downPipeline, post.down[i - 1]);
+    fullscreenPass(encoder, target.createView(), this.postPipeline, post.group);
+  }
+
+  /**
+   * The exposed scene averaged over a shutter: the waves solved and the scene drawn at
+   * evenly spaced times across `seconds` centred on the scene time, each submitted on its
+   * own (the ocean's parameters are written per sub-frame). Clouds hold still within a
+   * frame; moving water and its glints streak as on film.
+   */
+  private drawShutter(target: GPUTexture, shutter: Shutter): void {
+    const d = this.device;
+    const post = this.postTarget(target.width, target.height);
+    const n = Math.max(1, Math.round(shutter.samples));
+    for (let i = 0; i < n; i++) {
+      const encoder = d.createCommandEncoder();
+      this.runOcean(encoder, this.settings.sceneTime + ((i + 0.5) / n - 0.5) * shutter.seconds);
+      fullscreenPass(encoder, post.levels[0], this.sceneAccumPipeline, this.sceneAccumBindGroup, i === 0, 1 / n);
+      d.queue.submit([encoder.finish()]);
+    }
   }
 
   /** The exposed scene at an output size, with its mip chain and the camera's bind groups. */
@@ -877,15 +898,19 @@ export class Renderer {
   }
 
   // Renders the preview view offscreen and returns RGBA8 pixels (display-encoded, preview only).
-  async capture(viewData: Float32Array<ArrayBuffer>, width: number, height: number): Promise<Uint8Array> {
+  async capture(viewData: Float32Array<ArrayBuffer>, width: number, height: number, shutter?: Shutter): Promise<Uint8Array> {
     const d = this.device;
     if (this.format !== 'rgba8unorm') throw new Error('capture() requires a renderer created with present = false');
     const target = d.createTexture({ size: [width, height], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
     const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
     const buffer = d.createBuffer({ size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     d.queue.writeBuffer(this.viewBuffer, 0, viewData);
+    const blur = !!shutter && shutter.samples > 1 && shutter.seconds > 0;
+    if (blur) this.drawShutter(target, shutter);
     const encoder = d.createCommandEncoder();
-    this.drawView(encoder, target);
+    // Back to the waves at the scene time.
+    if (blur) this.runOcean(encoder);
+    this.drawView(encoder, target, blur);
     encoder.copyTextureToBuffer({ texture: target }, { buffer, bytesPerRow }, [width, height]);
     d.queue.submit([encoder.finish()]);
     await buffer.mapAsync(GPUMapMode.READ);
@@ -957,6 +982,24 @@ const SCENE_FORMAT: GPUTextureFormat = 'rgba16float';
 const POST_LEVELS = 7;
 /** View uniform (display.wgsl / post.wgsl View): six vec4s. */
 const VIEW_BYTES = 96;
+
+/** A film shutter for captures: open for `seconds`, sampled at `samples` times. */
+export interface Shutter {
+  seconds: number;
+  samples: number;
+}
+
+/** One fullscreen triangle into view; `clear` false keeps what is there (blended passes). */
+function fullscreenPass(encoder: GPUCommandEncoder, view: GPUTextureView, pipeline: GPURenderPipeline, group: GPUBindGroup, clear = true, blend?: number): void {
+  const p = encoder.beginRenderPass({
+    colorAttachments: [{ view, loadOp: clear ? 'clear' : 'load', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 0 } }],
+  });
+  p.setPipeline(pipeline);
+  p.setBindGroup(0, group);
+  if (blend !== undefined) p.setBlendConstant([blend, blend, blend, blend]);
+  p.draw(3);
+  p.end();
+}
 
 interface PostTarget {
   texture: GPUTexture;
