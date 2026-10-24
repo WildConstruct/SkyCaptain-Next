@@ -4,6 +4,8 @@
 // they all shade the same ground. Modules that include this declare:
 //   terrain_tex: texture_2d<f32>  r = type index / 255, g = per-tile random, b = elevation
 //   ground: Ground (uniform)
+//   column_tex: texture_2d<f32>, repeat_sampler: sampler  the cloud column map (clouds.wgsl
+//     cloud_column), for under_deck
 // Evaluated once per ground pixel, never per march step. Water also needs:
 //   ocean_tex: texture_2d_array<f32> (ocean.wgsl: slope, squared slope, folding; mipmapped)
 //   ocean_sampler: sampler (repeat, linear)
@@ -185,7 +187,9 @@ fn water_surface(xz: vec2f, up: vec3f, footprint: f32) -> Water {
     let m = select(gust, 1.0, c == 0);
     slope += transpose(rot) * s.xy * m;
     hidden += max(s.z - dot(s.xy, s.xy), 0.0) * m * m;
-    fold = min(fold, s.w);
+    // Whitecaps break on the shorter waves' crests; the long swell's folding is broad and
+    // smooth and would whiten 100 m patches.
+    if (c > 0) { fold = min(fold, s.w); }
   }
   // Capillary ripples shorter than the finest cascade still roughen the surface: about
   // half of the Cox-Munk mean square slope for this wind lives there.
@@ -234,4 +238,36 @@ const GROUND_SHADOW_KM: f32 = 12.0;
 fn near_glint(xz: vec2f) -> f32 {
   let r = max(abs(xz.x), abs(xz.y));
   return 1.0 - smoothstep(GROUND_SHADOW_KM * 0.38, GROUND_SHADOW_KM * 0.48, r);
+}
+
+// Diffuse light through a cloud column of optical depth tau: the two-stream transmission
+// of a conservative scatterer, 1 / (1 + 0.75 (1 - g) tau). It falls off slowly (thick
+// overcast still passes ~10-30%), unlike the beam's exponential. Shared by the cloud pass
+// (light inside and under the clouds) and the composite (the air under a deck).
+fn diffuse_transmission(tau: f32) -> f32 {
+  return 1.0 / (1.0 + 0.75 * (1.0 - SKY_DIFFUSE_G) * tau);
+}
+const SKY_DIFFUSE_G: f32 = 0.85;
+
+// Ground-track distances (km) at which the air toward the horizon is checked for cloud above.
+const DECK_TRACK_KM = array<f32, 5>(3.0, 8.0, 15.0, 25.0, 40.0);
+
+// The sky toward the horizon under a cloud deck. The sky cube is the clear atmosphere, so
+// near the horizon it holds a long path of sunlit air; under a deck that air is lit only by
+// the grey light diffusing through the cloud. Shade it by the deck's diffuse transmission
+// along the direction's ground track: dark grey under a thick deck, untouched under clear
+// sky. Looking up, the sky seen through gaps is the real sky and is left alone.
+fn under_deck(dir: vec3f, sky: vec3f) -> vec3f {
+  let w = 1.0 - smoothstep(0.03, 0.3, dir.y);
+  if (w <= 0.0) { return sky; }
+  let track = normalize(vec2f(dir.x, dir.z) + vec2f(1e-6, 0.0));
+  var through = 0.0;
+  for (var k = 0; k < 5; k++) {
+    let xz = track * DECK_TRACK_KM[k];
+    let tau = textureSampleLevel(column_tex, repeat_sampler, (xz + params.wind.xy) / params.scale.z + 0.5, 0.0).x;
+    through += diffuse_transmission(tau);
+  }
+  through /= 5.0;
+  let grey = vec3f(dot(sky, vec3f(0.2126, 0.7152, 0.0722))) * through;
+  return mix(sky, grey, w * (1.0 - through));
 }

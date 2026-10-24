@@ -30,12 +30,15 @@ struct View {
 
 // The cloud pass's ground shadow map (composite.wgsl).
 @group(0) @binding(12) var shadow_tex: texture_2d<f32>;
+// The cloud pass's column map and a repeating sampler for it (composite.wgsl under_deck).
+@group(0) @binding(13) var column_tex: texture_2d<f32>;
+@group(0) @binding(14) var repeat_sampler: sampler;
 
 fn seen_ground(dir: vec3f) -> vec4f { return textureSampleLevel(ground_tex, cube_sampler, dir, 0.0); }
 
 fn mirror_radiance(r: vec3f) -> vec3f {
   let cloud = textureSampleLevel(cloud_tex, cube_sampler, r, 0.0);
-  return textureSampleLevel(sky_tex, cube_sampler, r, 0.0).rgb * cloud.a + cloud.rgb;
+  return under_deck(r, textureSampleLevel(sky_tex, cube_sampler, r, 0.0).rgb) * cloud.a + cloud.rgb;
 }
 
 struct VsOut {
@@ -55,7 +58,7 @@ fn vs(@builtin(vertex_index) index: u32) -> VsOut {
 fn environment(dir: vec3f, pixel: f32) -> vec3f {
   let sky = textureSampleLevel(sky_tex, cube_sampler, dir, 0.0).rgb;
   let cloud = textureSampleLevel(cloud_tex, cube_sampler, dir, 0.0);
-  var background = sky;
+  var background = under_deck(dir, sky);
   let sun = params.sun_dir.xyz;
   let radius = params.sun_color.w;
   let cos_angle = dot(dir, sun);

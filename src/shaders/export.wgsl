@@ -25,12 +25,15 @@
 
 // The cloud pass's ground shadow map (composite.wgsl).
 @group(0) @binding(12) var shadow_tex: texture_2d<f32>;
+// The cloud pass's column map and a repeating sampler for it (composite.wgsl under_deck).
+@group(0) @binding(13) var column_tex: texture_2d<f32>;
+@group(0) @binding(14) var repeat_sampler: sampler;
 
 fn seen_ground(dir: vec3f) -> vec4f { return sample_face(ground_tex, dir); }
 
 fn mirror_radiance(r: vec3f) -> vec3f {
   let cloud = sample_face(cloud_tex, r);
-  return sample_face(sky_tex, r).rgb * cloud.a + cloud.rgb;
+  return under_deck(r, sample_face(sky_tex, r).rgb) * cloud.a + cloud.rgb;
 }
 
 struct FaceUv {
@@ -87,7 +90,7 @@ fn composite(@builtin(global_invocation_id) id: vec3u) {
   if (any(id.xy >= size)) { return; }
   let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
   let dir = latlong_dir(uv);
-  let sky = sample_face(sky_tex, dir).rgb;
+  let sky = under_deck(dir, sample_face(sky_tex, dir).rgb);
   let cloud = sample_face(cloud_tex, dir);
 
   // Supersample the sun disc only near the sun (4x4 per texel).

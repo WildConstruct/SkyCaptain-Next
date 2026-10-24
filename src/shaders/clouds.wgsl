@@ -311,14 +311,6 @@ fn column_optical_depth(p: vec3f) -> f32 {
   return mix(c.z, 0.0, f - 2.0);
 }
 
-// Diffuse light through a cloud column of optical depth tau: the two-stream transmission
-// of a conservative scatterer, 1 / (1 + 0.75 (1 - g) tau). It falls off slowly (thick
-// overcast still passes ~10-30%), unlike the beam's exponential.
-fn diffuse_transmission(tau: f32) -> f32 {
-  return 1.0 / (1.0 + 0.75 * (1.0 - SKY_DIFFUSE_G) * tau);
-}
-const SKY_DIFFUSE_G: f32 = 0.85;
-
 fn approximate_multiple_scattering(optical_depth: f32, cos_theta: f32) -> f32 {
   // a: scattering, b: extinction, c: phase attenuation (Wrenninge et al.)
   var coeffs = vec3f(1.0);
@@ -503,7 +495,8 @@ fn air_between(o: vec3f, p: vec3f, dir: vec3f) -> vec3f {
 // the whole path in this direction (to space, or to sea level), so take the fraction of it
 // that the air up to the hit accounts for.
 fn air_inscatter(o: vec3f, dir: vec3f, t: f32) -> vec3f {
-  let full = textureSampleLevel(sky_tex, clamp_sampler, dir, 0.0).rgb;
+  // Under a cloud deck that air is lit only by the light diffusing through it.
+  let full = under_deck(dir, textureSampleLevel(sky_tex, clamp_sampler, dir, 0.0).rgb);
   let sea = ground_hit(length(o), dir, ground_radius());
   var t_full = 1e4;
   if (sea > 0.0) { t_full = sea; }
@@ -559,6 +552,11 @@ fn ground_radiance(o: vec3f, dir: vec3f, t_ground: f32, jitter: vec3f) -> Ground
     var shadow = textureSampleLevel(shadow_tex, clamp_sampler, source / GROUND_SHADOW_KM + 0.5, 0.0).r;
     if (any(abs(source) > vec2f(GROUND_SHADOW_KM * 0.5)) || height > cloud_bottom()) {
       shadow = exp(-layer_optical_depth(g, sun, DISTANT_SHADOW_STEPS, jitter.x));
+      // The few marched steps can slip through gaps of a deck: also take the beam through
+      // the cloud column where the sun ray crosses the middle of the layer.
+      let mid = cloud_bottom() + 0.5 * (cloud_top() - cloud_bottom()) - height;
+      let crossing = g + sun * (max(mid, 0.0) / max(sun.y, 0.1));
+      shadow = min(shadow, exp(-column_optical_depth(crossing - up * 0.5 * (cloud_top() - cloud_bottom())) / max(sun.y, 0.1)));
     }
     // A fixed step offset: jittered, the ridge shadow speckled at low sample counts.
     shadow *= terrain_shadow(g, sun, 0.5);

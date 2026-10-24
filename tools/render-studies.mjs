@@ -22,6 +22,17 @@ const only = arg('only', '')?.split(',').filter(Boolean) ?? [];
 // Wind 25 km/h toward the east-north-east (across the default view, which looks NNE);
 // clouds turn over every 20 minutes. Time-lapse is scene seconds per clip second.
 const wind = { windSpeed: 25, windHeading: 70, cloudLife: 20 };
+const STORM_SKY = {
+  terrain: 1, terrainWater: 0.9, eyeAltitude: 0.03, terrainWind: 20, terrainFetch: 500, terrainWindHeading: 200,
+  yaw: 20, pitch: 2, fov: 60, sunElevation: 25, sunAzimuth: 60, sunIntensity: 14, haze: 45, ambient: 0.4,
+  forwardG: 0.7, powder: 1, density: 600, coverage: 0.55, typeBias: 0.35,
+};
+const STORM_SHAPES = [
+  { kind: 'storm_cell', x: 6, z: 17, size: 8, seed: 3 },
+  { kind: 'storm_cell', x: -4, z: 22, size: 8, seed: 8 },
+  { kind: 'storm_cell', x: 14, z: 20, size: 7, seed: 5 },
+  { kind: 'front', x: 6, z: 30, size: 40, aspect: 0.3, rotation: 160, seed: 2 },
+];
 const STUDIES = [
   { name: 'fair-cumulus-1x', hint: 'Fair-weather cumulus at real speed', sky: {}, anim: { timeLapse: 1 } },
   { name: 'fair-cumulus-3x', hint: 'The same sky at 3x', sky: {}, anim: { timeLapse: 3 } },
@@ -52,13 +63,23 @@ const STUDIES = [
     name: 'lake-mountains-1x', hint: 'A lake under a mountain range at real speed, long lens, from the shore',
     sky: { terrain: 1, terrainWater: 0.4, terrainHeight: 2.5, terrainRidges: 0.8, eyeAltitude: 0.04, pitch: -1, fov: 30, sunElevation: 12, sunAzimuth: 100, aimRelief: 1 }, anim: { timeLapse: 1 },
   },
+  // Storms: a line of storm cells under a front, gale-force sea (20 m/s over 500 km of
+  // fetch), sun hidden above the deck. From 30 m over the water.
+  {
+    name: 'storm-sea-1x', hint: 'A storm line over a gale-force sea at real speed, from 30 m',
+    sky: { ...STORM_SKY }, shapes: STORM_SHAPES, anim: { timeLapse: 1, windSpeed: 60, windHeading: 200 },
+  },
+  {
+    name: 'storm-sea-6x', hint: 'The storm line at 6x: cells drift and boil, the sea runs',
+    sky: { ...STORM_SKY }, shapes: STORM_SHAPES, anim: { timeLapse: 6, windSpeed: 60, windHeading: 200 },
+  },
 ];
 
 mkdirSync('shots/studies', { recursive: true });
 for (const study of STUDIES) {
   if (only.length && !only.includes(study.name)) continue;
   // 2048 px cube faces: a 1920 px wide, 80 degree view needs ~24 px per degree.
-  const query = new URLSearchParams({ quality: 'ultra', face: arg('face', '2048'), samples: arg('samples', '16'), grain: arg('grain', '0.015'), softness: arg('softness', '0.6'), shutter: arg('shutter', '180'), focusM: arg('focus', '3'), fStop: arg('fstop', '2.8'), bloom: arg('bloom', '0.02'), halation: arg('halation', '0.04'), vignette: arg('vignette', '0.35'), aberration: arg('aberration', '0.0006'), ...Object.fromEntries(Object.entries(study.sky).map(([k, v]) => [k, String(v)])) }).toString();
+  const query = new URLSearchParams({ quality: 'ultra', face: arg('face', '2048'), samples: arg('samples', '16'), grain: arg('grain', '0.015'), softness: arg('softness', '0.6'), shutter: arg('shutter', '180'), focusM: arg('focus', '3'), fStop: arg('fstop', '2.8'), bloom: arg('bloom', '0.02'), halation: arg('halation', '0.04'), vignette: arg('vignette', '0.35'), aberration: arg('aberration', '0.0006'), ...Object.fromEntries(Object.entries(study.sky).map(([k, v]) => [k, String(v)])), ...(study.shapes ? { shapes: JSON.stringify(study.shapes) } : {}) }).toString();
   const anim = { duration: seconds, fps: 24, ...wind, ...study.anim };
   const out = `shots/studies/${study.name}.mp4`;
   writeFileSync(`shots/studies/${study.name}.json`, JSON.stringify({ ...study, query, animation: anim }, null, 2));

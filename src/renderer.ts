@@ -492,6 +492,8 @@ export class Renderer {
         { binding: 10, resource: this.oceanView() },
         { binding: 11, resource: this.oceanSampler },
         { binding: 12, resource: this.shadowTex.createView() },
+        { binding: 13, resource: this.columnTex.createView() },
+        { binding: 14, resource: this.repeatSampler },
       ],
     });
     this.displayBindGroup = displayGroup(this.displayPipeline);
@@ -529,8 +531,7 @@ export class Renderer {
         { binding: 18, resource: groundCube.createView({ dimension: '2d-array' }) },
         { binding: 19, resource: this.oceanView() },
         { binding: 20, resource: this.oceanSampler },
-        // The path-traced reference does not read the column map.
-        ...(pipeline === this.referencePipeline ? [] : [{ binding: 22, resource: this.columnTex.createView() }]),
+        { binding: 22, resource: this.columnTex.createView() },
       ],
     });
   }
@@ -623,6 +624,8 @@ export class Renderer {
           { binding: 10, resource: this.oceanView() },
           { binding: 11, resource: this.oceanSampler },
           { binding: 12, resource: this.shadowTex.createView() },
+          { binding: 13, resource: this.columnTex.createView() },
+          { binding: 14, resource: this.repeatSampler },
         ],
       }));
       pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));

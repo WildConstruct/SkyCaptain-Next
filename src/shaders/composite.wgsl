@@ -3,7 +3,9 @@
 //   seen_ground(dir) -> vec4f      the cloud pass's ground buffer (clouds.wgsl GroundHit)
 //   mirror_radiance(r) -> vec3f    the finished sky and clouds along r
 // and binds transmittance_lut, cube_sampler, shadow_tex (the cloud pass's ground shadow map:
-// r = sun through the clouds, g = sun past the relief, over GROUND_SHADOW_KM at sea level).
+// r = sun through the clouds, g = sun past the relief, over GROUND_SHADOW_KM at sea level),
+// column_tex and repeat_sampler (the cloud pass's column map, for ground.wgsl under_deck).
+
 
 const WATER_TAPS: i32 = 8;
 // Glitter: the sun reflects off individual capillary facets about this big (m^2).
