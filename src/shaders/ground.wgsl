@@ -14,6 +14,7 @@ struct Ground {
   relief: vec4f,            // x = highest ground (km, 0 = flat), y = ground height under the eye (km), z = snow line (km)
   waves: vec4f,             // tile size of ocean cascades 0..2 (m), wind over the water (m/s)
   place: vec4f,             // xy = where the eye stands in terrain space (km): the ground is offset by it
+  gusts: vec4f,             // xy = wind direction over the water (x east, z north), z = gust drift downwind (km)
 }
 
 const T_WATER: u32 = 0u;
@@ -140,10 +141,34 @@ struct Water {
   normal: vec3f,
   alpha: f32,   // GGX roughness (alpha = sqrt(2 x mean square slope))
   fold: f32,    // mean Jacobian: below ~0.6 the surface is folding over (whitecaps)
+  foam: f32,    // whitecap cover, 0..1
+}
+
+// Whitecaps cover the water where the waves fold over (Jacobian well under 1), from about
+// Beaufort 3 (5 m/s) and more in the gusts.
+const FOAM_ALBEDO: f32 = 0.7;
+
+// Gusts and slicks: real water is never uniformly rough. Gusts (cat's paws) roughen the
+// short waves in patches streaked along the wind and running downwind with it; between
+// them, calm slicks go nearly glassy. Returns a multiplier on the short waves' slope.
+// Long swell does not answer to a passing gust and is left alone.
+fn gustiness(xz: vec2f) -> f32 {
+  let along = ground.gusts.xy;
+  let across = vec2f(-along.y, along.x);
+  // Streaks: patches stretched along the wind (km).
+  let q = vec2f(dot(xz, along) - ground.gusts.z, dot(xz, across));
+  let g = gfbm(q / vec2f(1.6, 0.45), 101u) * 0.7 + gfbm(q / vec2f(0.5, 0.16), 102u) * 0.3;
+  return mix(0.3, 1.45, smoothstep(0.28, 0.72, g));
+}
+
+// A slow warp of the water plane, metres: bends the cascades' tiles so no repeat lines up.
+fn water_warp(xz: vec2f) -> vec2f {
+  return (vec2f(gfbm(xz / 2.3, 111u), gfbm(xz / 2.3, 112u)) - 0.5) * 220.0;
 }
 
 fn water_surface(xz: vec2f, up: vec3f, footprint: f32) -> Water {
-  let p = xz * 1000.0;
+  let p = xz * 1000.0 + water_warp(xz);
+  let gust = gustiness(xz);
   var slope = vec2f(0.0);
   var hidden = 0.0;
   var fold = 1.0;
@@ -156,19 +181,25 @@ fn water_surface(xz: vec2f, up: vec3f, footprint: f32) -> Water {
     let turn = OCEAN_TURNS[c];
     let rot = mat2x2f(cos(turn), sin(turn), -sin(turn), cos(turn));
     let s = textureSampleLevel(ocean_tex, ocean_sampler, (rot * p) / tile + OCEAN_OFFSETS[c], c, lod);
-    slope += transpose(rot) * s.xy;
-    hidden += max(s.z - dot(s.xy, s.xy), 0.0);
+    // The longest cascade is swell; the shorter two follow the gusts.
+    let m = select(gust, 1.0, c == 0);
+    slope += transpose(rot) * s.xy * m;
+    hidden += max(s.z - dot(s.xy, s.xy), 0.0) * m * m;
     fold = min(fold, s.w);
   }
   // Capillary ripples shorter than the finest cascade still roughen the surface: about
   // half of the Cox-Munk mean square slope for this wind lives there.
-  let capillary = 0.5 * (0.003 + 0.00512 * ground.waves.w);
+  let capillary = 0.5 * (0.003 + 0.00512 * ground.waves.w) * gust * gust;
   var w: Water;
   let tx = normalize(cross(vec3f(0.0, 0.0, 1.0), up));
   let tz = cross(up, tx);
   w.normal = normalize(up - slope.x * tx - slope.y * tz);
   w.alpha = clamp(sqrt(2.0 * (hidden + capillary)), 0.012, 0.62);
   w.fold = fold;
+  // Only the sharpest folds break; the threshold rises with the wind so cover grows from
+  // a few scattered caps near 5 m/s toward the ~3% Monahan's fit gives at 13 m/s.
+  let threshold = mix(0.55, 0.85, smoothstep(5.0, 20.0, ground.waves.w)) + (gust - 1.0) * 0.1;
+  w.foam = (1.0 - smoothstep(threshold - 0.2, threshold, fold)) * smoothstep(4.0, 6.0, ground.waves.w);
   return w;
 }
 

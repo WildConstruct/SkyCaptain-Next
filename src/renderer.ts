@@ -24,8 +24,8 @@ const PARAMS_BYTES = 176;
 export const WEATHER_SIZE = 1024;
 /** Largest terrain grid the ground texture holds. */
 const TERRAIN_TEXTURE_MAX = 256;
-/** Ground uniform (ground.wgsl Ground): 6 palette vec4s, info, relief, waves and place. */
-const GROUND_BYTES = 10 * 16;
+/** Ground uniform (ground.wgsl Ground): 6 palette vec4s, info, relief, waves, place and gusts. */
+const GROUND_BYTES = 11 * 16;
 /** Ocean slope texture mip levels (256 down to 1). */
 const OCEAN_MIPS = Math.log2(OCEAN_N) + 1;
 /** GPU time per display frame spent on cloud passes, ms (the rest is left for the page). */
@@ -304,6 +304,10 @@ export class Renderer {
       TERRAIN_TYPES.forEach((t, i) => data.set(recipe.palette[t], i * 4));
       this.waves = { windMs: recipe.waveWindMs, headingDeg: recipe.waveHeadingDeg, fetchKm: recipe.waveFetchKm };
       data.set([...OCEAN_SCALES, recipe.waveWindMs], 32);
+      // Gusts: the wind's direction over the water (x east, z north); the drift is written
+      // with the waves, as it follows the scene time.
+      const heading = (recipe.waveHeadingDeg * Math.PI) / 180;
+      data.set([Math.sin(heading), Math.cos(heading), this.gustDrift(), 0], 40);
       data.set([1, recipe.tileKm, map.size, recipe.seed % 100000], 24);
     }
     this.device.queue.writeBuffer(this.groundBuffer, 0, data);
@@ -326,7 +330,7 @@ export class Renderer {
     const fields = d.createBuffer({ size: 9 * n * n * 8, usage: GPUBufferUsage.STORAGE });
     const slopes = d.createTexture({
       size: [n, n, 3], format: 'rgba16float', mipLevelCount: OCEAN_MIPS,
-      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
     });
     const spectrum = compute(m, 'spectrum');
     const rows = compute(m, 'fft_rows');
@@ -351,6 +355,11 @@ export class Renderer {
     };
   }
 
+  /** How far gusts on the water have travelled downwind, km: they run with the wind. */
+  private gustDrift(): number {
+    return (this.waves.windMs * this.settings.sceneTime) / 1000;
+  }
+
   /** Solves the waves for the current scene time when they or the time changed. */
   private runOcean(encoder: GPUCommandEncoder): void {
     const key = JSON.stringify([this.waves, this.settings.sceneTime]);
@@ -359,6 +368,7 @@ export class Renderer {
     const o = this.ocean;
     const n = OCEAN_N;
     this.device.queue.writeBuffer(o.params, 0, packOcean(this.waves, this.settings.sceneTime));
+    this.device.queue.writeBuffer(this.groundBuffer, 42 * 4, new Float32Array([this.gustDrift()]));
     const pass = encoder.beginComputePass({ label: 'ocean' });
     pass.setPipeline(o.spectrum);
     pass.setBindGroup(0, o.groups.spectrum);
@@ -923,8 +933,8 @@ export class Renderer {
   }
 
   // Debug: reads one texel as floats. Used by tools/ to inspect scene-linear values.
-  async readTexel(name: 'sky' | 'cloud' | 'transmittance' | 'ms' | 'weather' | 'shape' | 'detail' | 'ground', x: number, y: number, layer = 0): Promise<number[]> {
-    const tex = { sky: this.skyCube, cloud: this.cloudCube, transmittance: this.transmittanceLut, ms: this.msLut, weather: this.weatherTex, shape: this.shapeTex, detail: this.detailTex, ground: this.groundCube }[name];
+  async readTexel(name: 'sky' | 'cloud' | 'transmittance' | 'ms' | 'weather' | 'shape' | 'detail' | 'ground' | 'ocean', x: number, y: number, layer = 0): Promise<number[]> {
+    const tex = { sky: this.skyCube, cloud: this.cloudCube, transmittance: this.transmittanceLut, ms: this.msLut, weather: this.weatherTex, shape: this.shapeTex, detail: this.detailTex, ground: this.groundCube, ocean: this.ocean.slopes }[name];
     const half = tex.format === 'rgba16float';
     const buffer = this.device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const encoder = this.device.createCommandEncoder();

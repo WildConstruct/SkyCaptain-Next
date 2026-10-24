@@ -577,7 +577,10 @@ fn water_radiance(g: vec3f, up: vec3f, dir: vec3f, t: f32, sun: vec3f, sun_at_gr
   // unit of downwelling light (a few percent, peaking in the blue for deep water).
   let scatter = ground.palette[0].rgb;
   let body = scatter * (beam + sky * 0.94) + scatter * 0.3 * sky;
-  return (1.0 - f) * body + spec;
+  // Whitecaps beyond the composite's reach (it draws the near ones per pixel).
+  let far = 1.0 - near_glint(g.xz);
+  let foam = FOAM_ALBEDO / PI * (sun_at_ground * sun_up + PI * sky);
+  return mix((1.0 - f) * body + spec * (1.0 - w.foam), foam, w.foam * far);
 }
 
 struct MarchResult {

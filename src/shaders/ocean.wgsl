@@ -105,8 +105,12 @@ fn spectrum(@builtin(global_invocation_id) id: vec3u) {
   let mx = (n - id.x) % n;
   let my = (n - id.y) % n;
   let band = cascade_band(c);
-  let amp_k = sqrt(2.0 * spectrum_at(k, band) * dk * dk);
-  let amp_mk = sqrt(2.0 * spectrum_at(-k, band) * dk * dk);
+  // skyCaptain: amplitudes so the surface's variance is the spectrum's integral: the noise
+  // has unit variance per component (E|xi|^2 = 2) and h(k) sums h0(k) and h0(-k)*, so
+  // E|h0|^2 = S dk^2 / 2 needs amplitude sqrt(S dk^2 / 4). (Upstream used sqrt(2 S dk^2),
+  // 8x the variance: slopes 2.8x too steep against Cox-Munk.)
+  let amp_k = sqrt(0.25 * spectrum_at(k, band) * dk * dk);
+  let amp_mk = sqrt(0.25 * spectrum_at(-k, band) * dk * dk);
   let h0 = noise[(c * n + id.y) * n + id.x] * amp_k;
   let h0m = noise[(c * n + my) * n + mx] * amp_mk;
   let kl = max(length(k), 1e-6);
@@ -183,8 +187,9 @@ fn pack(@builtin(global_invocation_id) id: vec3u) {
   let lambda = ocean.bands.z;
   let jx = 1.0 + lambda * b.x;
   let jz = 1.0 + lambda * b.y;
-  // Choppy waves: the slope of the displaced surface, sharper at crests.
-  let slope = vec2f(a.x / max(jx, 0.05), a.y / max(jz, 0.05));
+  // Choppy waves: the slope of the displaced surface, sharper at crests. skyCaptain: the
+  // division is held to 2x so folding crests do not throw slopes to infinity.
+  let slope = vec2f(a.x / max(jx, 0.5), a.y / max(jz, 0.5));
   let jacobian = jx * jz - lambda * lambda * cross * cross;
   textureStore(slope_out, id.xy, c, vec4f(slope, dot(slope, slope), jacobian));
 }

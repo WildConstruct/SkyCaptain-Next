@@ -54,7 +54,8 @@ fn ground_ambient(dir: vec3f, pixel: f32) -> vec3f {
     mirrored += mirror_radiance(r);
   }
   mirrored /= f32(WATER_TAPS);
-  var water = water_fresnel(nov) * mirrored;
+  // Whitecaps hide the mirror under them.
+  var water = water_fresnel(nov) * mirrored * (1.0 - w.foam);
 
   // The sun's glint (GGX widened by the sun disc, as clouds.wgsl water_radiance), lit
   // through the air above the water and the shadow map's clouds and relief.
@@ -62,15 +63,21 @@ fn ground_ambient(dir: vec3f, pixel: f32) -> vec3f {
   let sun = params.sun_dir.xyz;
   let nol = dot(n, sun);
   let sun_up = dot(up, sun);
-  if (near > 0.0 && nol > 0.0 && sun_up > -0.05) {
+  if (near > 0.0 && sun_up > -0.05) {
     let shadow = textureSampleLevel(shadow_tex, cube_sampler, g.xz / GROUND_SHADOW_KM + 0.5, 0.0);
     let sun_air = textureSampleLevel(transmittance_lut, cube_sampler, vec2f(max(sun_up, 0.0) * 0.5 + 0.5, 0.0), 0.0).rgb;
     let sun_at_water = params.sun_color.rgb * params.sun_dir.w * sun_air * shadow.r * shadow.g;
+    // Whitecaps near the eye, resolved per pixel (the cloud pass adds them farther out):
+    // diffuse foam under the sky and the sun.
+    let foam = FOAM_ALBEDO / PI * (downwelling.rgb + sun_at_water * max(sun_up, 0.0));
+    water = mix(water, foam, w.foam * near);
     let h = normalize(sun + v);
     let disc = clamp(w.alpha + params.sun_color.w * 0.5, 0.0, 1.0);
     let widen = (w.alpha * w.alpha) / (disc * disc);
     let fs = 0.02 + 0.98 * pow(1.0 - max(dot(v, h), 1e-4), 5.0);
-    water += near * sun_at_water * ggx_d(max(dot(n, h), 0.0), disc) * smith_vis(nov, nol, w.alpha) * fs * nol * widen;
+    if (nol > 0.0) {
+      water += near * (1.0 - w.foam) * sun_at_water * ggx_d(max(dot(n, h), 0.0), disc) * smith_vis(nov, nol, w.alpha) * fs * nol * widen;
+    }
   }
   return light + water * air * seen.a;
 }
