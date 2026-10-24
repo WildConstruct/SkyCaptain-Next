@@ -62,7 +62,7 @@ export class GroundPanel {
     paintSummary.textContent = 'Paint';
     paint.append(paintSummary);
     const canvas = document.createElement('canvas');
-    canvas.className = 'minimap';
+    canvas.className = 'ground-map';
     canvas.title = 'Drag to paint land cover; the layout recollapses around it when you let go. Centred on the eye, north up.';
     this.map = new GroundMap(canvas, settings, store);
     const chips = document.createElement('div');

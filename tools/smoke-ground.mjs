@@ -66,7 +66,7 @@ console.log('terrain round-trips through the sky file');
 await page.getByText('Paint', { exact: true }).click();
 await page.getByRole('button', { name: 'Water', exact: true }).click();
 const place = await page.evaluate(() => ({ ...window.skyGround.place }));
-const map = page.locator('canvas.minimap').last();
+const map = page.locator('canvas.ground-map');
 const box = await map.boundingBox();
 await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.3);
 await page.mouse.down();
